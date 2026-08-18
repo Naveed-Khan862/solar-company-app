@@ -1,0 +1,41 @@
+name: solar_company_project
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+  image_picker: ^1.1.2
+  local_auth: ^2.3.0
+  share_plus: ^10.0.0
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  google_sign_in: ^6.2.1
+  cloud_firestore: ^5.4.4
+  firebase_storage: ^12.3.4
+  package_info_plus: ^8.0.0
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+  firebase_crashlytics: ^4.3.10
+  firebase_app_check: ^0.3.2+10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  riverpod_generator: ^2.4.0
+  build_runner: ^2.4.8
+  custom_lint: ^0.6.4
+  riverpod_lint: ^2.3.10
+
+flutter:
+  uses-material-design: true

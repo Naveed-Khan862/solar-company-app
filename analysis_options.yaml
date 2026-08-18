@@ -1,0 +1,62 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Style (noisy ones off — codebase doesn't follow them, pure Problems-panel noise)
+    prefer_const_constructors: false
+    prefer_const_declarations: false
+    prefer_const_literals_to_create_immutables: false
+    prefer_final_locals: true
+    prefer_final_fields: true
+    prefer_final_in_for_each: true
+    avoid_unnecessary_containers: true
+    sized_box_for_whitespace: true
+    use_key_in_widget_constructors: true
+    prefer_single_quotes: true
+    avoid_empty_else: true
+    curly_braces_in_flow_control_structures: false
+    prefer_expression_function_bodies: false
+
+    # Safety
+    avoid_print: true
+    avoid_relative_lib_imports: true
+    avoid_returning_null_for_void: true
+    avoid_slow_async_io: true
+    cancel_subscriptions: true
+    close_sinks: true
+    unawaited_futures: true
+    prefer_relative_imports: true
+
+    # Performance
+    prefer_is_empty: true
+    prefer_is_not_empty: true
+    prefer_collection_literals: true
+    prefer_spread_collections: true
+    prefer_if_null_operators: true
+    prefer_null_aware_operators: true
+
+    # Maintainability
+    always_declare_return_types: true
+    annotate_overrides: true
+    avoid_init_to_null: true
+    avoid_positional_boolean_parameters: false
+    avoid_redundant_argument_values: false
+    avoid_types_as_parameter_names: true
+    library_prefixes: true
+    no_leading_underscores_for_local_identifiers: false
+    prefer_generic_function_type_aliases: true
+    prefer_mixin: true
+    prefer_typing_uninitialized_variables: true
+    type_annotate_public_apis: true
+
+analyzer:
+  exclude:
+    - build/**
+    - .dart_tool/**
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+  errors:
+    avoid_print: warning
+    invalid_annotation_target: ignore
+  plugins:
+    - custom_lint

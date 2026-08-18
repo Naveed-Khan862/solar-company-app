@@ -1,0 +1,18 @@
+// Solar Company — Firebase Storage Security Rules
+// =====================================================
+// NOTE: Isay Firebase Console → Storage → Rules mein paste karke DEPLOY karo.
+//
+// Fix #9: profile photos — sirf owner apni photo upload/delete kar sakta hai;
+// koi bhi signed-in user photos dekh sakta hai (avatars).
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Profile photos: profile_photos/{email}.jpg
+    match /profile_photos/{email}.jpg {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && email == request.auth.token.email;
+      allow delete: if request.auth != null && email == request.auth.token.email;
+    }
+  }
+}
