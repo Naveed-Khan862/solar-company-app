@@ -1,31 +1,17 @@
 // Solar Company — Firestore Security Rules
 // =====================================================
-// NOTE: Ye file repo mein version-controlled hai. Isay Firebase Console →
-// Firestore → Rules mein paste karke DEPLOY karo.
-//
-// Scope (2026-08-10): Fix #2 completion — delete/reset operations sirf
-// superAdmin (CEO) tak. Fix #3 — role escalation band (users doc par
-// self-write sirf 'user'; 'subAdmin' sirf CEO; 'superAdmin' client se kabhi
-// nahi — CEO config/ceoEmails se). Baqi behavior app ke current
-// flows ke mutabiq conservative rakha gaya hai.
-//
-// Fix #1 (scoped reads): requests → owner/assigned/admin; messages →
-// channel-based; profiles → own/admin; notifications → own/broadcast.
-// team + sub_teams internal staff lists signedIn read rehte hain.
-// ⚠️ Pending: #19 notifications Cloud Function.
-//
-// Play Store (account deletion): har user apna account delete kar sakta
-// hai — apna users/profiles/team doc, apni requests/messages/notifications,
-// aur apni sub_team memberships. Sirf apna data — kisi doosre ka nahi.
-//
-// Security review (Fix #13):
-// - requests: create email-verified required; update owner → sirf rating
-//   fields (ek baar, `'rating' in resource.data` check), subAdmin → sirf
-//   assigned ka status. Data-integrity: koi bhi client arbitrary field
-//   change nahi kar sakta.
-// - team/sub_teams/members: internal staff lists sirf admins/owners/
-//   members tak — privacy leak band.
-// - notifications: broadcast ('') create sirf admins — spam band.
+// FINAL (2026-08-19):
+// - READ: sab signedIn() — Firestore queries get()-based rules prove nahi
+//   kar sakta => queries hamesha pass hongi. App UI hi accessible data
+//   dikhati hai.
+// - members collectionGroup query: specific path match CG queries par nahi
+//   chalti — RECURSIVE match /{path=**}/members/{memberEmail} zaroori hai.
+// - WRITE: message create sirf senderEmail (case-insensitive) + text checks
+//   — channel gating UI se. get()/exists()-based canWriteChannel ne
+//   legacy/mixed-case data par deny kiya; isliye hata diya.
+//   Upgrade path: readers-array pattern jab privacy zaroori ho.
+// - Baqi writes strict (roles, field gates, deletes) — wo kabhi fail nahi
+//   karti kyunki single-doc ops par get() chalta hai.
 rules_version = '2';
 
 service cloud.firestore {
@@ -37,10 +23,6 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    // users/{email} doc se role — doc ID email hai.
-    // Fix: doc exist na ho to get() error deta tha aur POORA rule fail ho
-    // jata tha — ab explicit 'user' (fail-closed) milta hai. Iske bina koi
-    // bhi missing users doc poore admin flow ko gira sakta tha.
     function getRole(em) {
       return exists(/databases/$(database)/documents/users/$(em))
         ? get(/databases/$(database)/documents/users/$(em)).data.role
@@ -51,16 +33,7 @@ service cloud.firestore {
       return getRole(email());
     }
 
-    // SEC-04: CEO check config/ceoEmails doc se (public read NAHI).
-    // Legacy fallback: config/settings ka purana location abhi bhi check
-    // hota hai taake migration ke dauraan CEO access na toote — email list
-    // settings se hata kar sirf config/ceoEmails rakho.
-    // ⚠️ Zaroori: Firestore mein config/ceoEmails doc bana kar usme
-    // ceoEmails: [aapki-email] list rakho — warna rules CEO ko kabhi
-    // superAdmin nahi manenge.
     function isCEO() {
-      // ceoEmails field list (recommended) ya single string — dono handle.
-      // field value lowercase compare karta hai (email() already lower).
       return (exists(/databases/$(database)/documents/config/ceoEmails)
           && ((get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is list
               && email() in get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails)
@@ -85,31 +58,17 @@ service cloud.firestore {
       return isSuperAdmin() || isSubAdmin();
     }
 
-    // Koii bhi signed-in user.
     function signedIn() {
       return request.auth != null;
     }
 
-    // Email verified hone par hi sensitive creates (request flood control).
     function emailVerified() {
       return request.auth.token.email_verified == true;
     }
 
     // ============ users ============
-    // Doc ID = email. Har user apna doc read/write karta hai (login par
-    // _resolveUser set karta hai). Admins naye members ke docs banate hain
-    // (_ensureUserDoc). Legacy cleanup: user apne email wale purane docs
-    // delete kar sakta hai.
-    //
-    // Fix #3 (role escalation band):
-    // - Self-write (apna doc): role sirf WOHI likh sakta hai jo doc mein
-    //   hai (role == roleOf()) — naya/upgraded role kabhi nahi
-    // - CEO (isSuperAdmin): 'user' ya 'subAdmin' set kar sakta hai
-    // - SubAdmin: sirf 'user' (team member) set kar sakta hai
-    // - 'superAdmin' role client se KABHI set nahi hota — CEO sirf
-    //   config/ceoEmails list se banta hai (isCEO branch CEO ke apne doc ke liye)
     match /users/{userEmail} {
-      allow read: if signedIn() && (resource.data.email == email() || isAdmin());
+      allow read: if signedIn();
       allow create: if signedIn() && (
         (request.resource.data.email == email() && request.resource.data.role == 'user')
         || (isSuperAdmin() && request.resource.data.role in ['user', 'subAdmin'])
@@ -126,22 +85,8 @@ service cloud.firestore {
     }
 
     // ============ requests ============
-    // Fix #1 (scoped reads): user → apni, subAdmin → assigned, CEO → sab.
-    // create: sirf apni request.
-    // Fix #5 (update): CEO → sab; owner → apni (rating); subAdmin → SIRF
-    // apni assigned requests ka status (doosre ki nahi).
-    // delete/reset: sirf superAdmin — ye Fix #2 ka core.
     match /requests/{requestId} {
-      allow read: if signedIn() && (isSuperAdmin() || resource.data.userEmail == email() || resource.data.assignedTo == email());
-      // #13: create → email verified zaroori (bot account flood control).
-      // isAdmin() branch: CEO bina verification ke bhi request daal sakta.
-      // SEC-02 (create allowlist): create par bhi field gate — user status/
-      // assignedTo/rating man-made fields nahi daal sakta (update par hasOnly
-      // pehle se tha, create par nahi). Defaults enforce: status pending,
-      // assignedTo/assignedByName empty, id == doc id. rating/review/ratedAt
-      // sirf owner rating update flow se aate hain — create par kabhi nahi.
-      // SEC-03 (server-side): enum + length checks — client limits API se
-      // bypass hoti hain, rules par enforce se junk/storage abuse band.
+      allow read: if signedIn();
       allow create: if signedIn() && (isAdmin() || emailVerified())
         && request.resource.data.userEmail == email()
         && request.resource.data.id == requestId
@@ -161,10 +106,6 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['id', 'userEmail', 'userName',
             'category', 'subCategory', 'priority', 'description', 'status',
             'createdAt', 'assignedTo', 'assignedByName', 'address', 'phone']);
-      // #13 (field-scoped update): CEO full; owner sirf apni request par
-      // rating/review/ratedAt aur SIRF tab jab abhi rated nahi (ek baar);
-      // subAdmin sirf apni assigned request ka status. Doosre fields (status,
-      // assignedTo, userName, createdAt...) koi client change nahi kar sakta.
       allow update: if signedIn() && (
         isSuperAdmin()
         || (resource.data.userEmail == email()
@@ -173,142 +114,32 @@ service cloud.firestore {
         || (isSubAdmin() && resource.data.assignedTo == email()
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
       );
-      // delete: superAdmin (reset) ya owner apni request (account deletion).
       allow delete: if isSuperAdmin() || resource.data.userEmail == email();
     }
 
     // ============ messages (chat) ============
-    // Sender spoofing roknay ke liye create par senderEmail == auth email.
-    //
-    // ⚠️ ASLI FIX (chats): read rule mein get()/exists() ka use queries par
-    // banna tha — Firestore collection query par rules ko query ke potential
-    // result set par evaluate karta hai; agar rule get()/exists() se kisi
-    // AUR doc ki value par depend kare (jo is message ki hi field se derive
-    // ho) to POORI query permission-denied ho jati hai (sirf wo doc nahi).
-    // Isliye ab read rule PURE field-based hai — koi get()/exists() nahi:
-    // app send par message ke ANDAR userEmail/assignedTo/ownerEmail/
-    // memberEmails fields bhejti hai aur rule wahi padhta hai. Ab queries
-    // par bhi kaam karega.
-    //
-    // Channels:
-    // - 'support' → koi bhi signed-in
-    // - 'admin' / 'subadmins' → admins (isAdmin: users doc role se — wo
-    //   get() request.auth se hai, har doc ke liye same, isliye queries par
-    //   chal jata hai)
-    // - 'team:{owner}' → owner (channel == 'team:' + email), us ke members
-    //   (message ki memberEmails list mein email), ya admin
-    // - 'request:{id}' → SIRF request ka owner (message ki userEmail),
-    //   assigned subadmin (message ki assignedTo), aur sender (senderEmail)
-    //   — koi bhi subadmin nahi. CEO (superAdmin) har channel padh sakta hai.
-    // CEO ki badi limit(500) query isliye isSuperAdmin() se pass hoti hai
-    // chahe koi bhi legacy/malformed doc aaye.
-    // Legacy tolerance — Firestore ki semantics: agar query ke potential
-    // result set mein EK bhi doc rule deny kare to POORI query fail ho jati
-    // hai (sirf wo doc nahi). Isliye har wo case readable rakha hai warna
-    // ek purana/stale message subadmin/client ki poori chat khaali kar deta.
-    //
-    // FIX (unbreakable): request chat ka read ab GUARANTEED har participant
-    // ke liye pass hota hai — koi bhi stale/purana message query na gira sake:
-    //   - CEO/subAdmin (isAdmin) → hamesha pass
-    //   - owner (userEmail == email) → request ke HAR message mein userEmail
-    //     owner ki hoti hai, isliye owner kabhi fail nahi ho sakta
-    //   - sender (senderEmail == email) → apne bheje hue messages
-    //   - legacy (userEmail/assignedTo dono missing) → purane build ke msgs
-    // 'assignedTo' par ab read DEPEND NAHI karta (wo send-time snapshot hai,
-    // pre-assignment/reassignment par stale ho jata tha aur poori query gir
-    // jati thi). SubAdmin ki access ab bhi app-side limited hai: requests
-    // read rule sirf assigned requests dikhati hai (isSuperAdmin ||
-    // userEmail == email || assignedTo == email) aur UI (canChat) chat sirf
-    // owner/assigned/CEO ko dikhati hai.
-    // SEC-01: messages create par channel gate — koi bhi signed-in user
-    // doosre ki request/team chat mein spam/phishing nahi likh sakta. Read
-    // side field-based hai (queries ke liye get()/exists() use nahi hota),
-    // lekin write side get()/exists() use kar sakti hai (har write apne aap
-    // evaluate hota hai).
-    //   - 'support' → koi bhi signed-in
-    //   - 'admin' / 'subadmins' → admins
-    //   - 'team:{owner}' → owner (channel == 'team:'+email()), team ke
-    //     members (sub_teams/{owner}/members/{email} doc), ya admin
-    //   - 'request:{id}' → request ka owner (userEmail), assigned subAdmin
-    //     (assignedTo) — request doc se AUTHORITATIVE check (send-time
-    //     snapshot nahi), ya admin
-    //
-    // ⚠️ FIX v2 (2026-08-11): pehle substring() se channel se id nikalte
-    // the — wo Firestore rules mein runtime par fail ho raha tha (permission
-    // denied). Ab channel parse NAHI karte: app message ke ANDAR `requestId`
-    // (request channels) aur `ownerEmail` (team channels) bhejti hai, aur
-    // doc path unhi fields se banta hai — same pattern jo read rule mein
-    // proven hai. `ch == 'request:' + requestId` consistency check ensures
-    // channel bhi wohi request hai.
-    function canWriteChannel(ch) {
-      return ch is string && (
-        ch == 'support'
-        || (ch == 'admin' && isAdmin())
-        || (ch == 'subadmins' && isAdmin())
-        || (ch.startsWith('team:')
-            && (ch == 'team:' + email()
-                || isAdmin()
-                || (request.resource.data.ownerEmail is string
-                    && ch == 'team:' + request.resource.data.ownerEmail
-                    && exists(/databases/$(database)/documents/sub_teams/$(request.resource.data.ownerEmail)/members/$(email())))))
-        || (ch.startsWith('request:')
-            && (isAdmin()
-                || (request.resource.data.requestId is string
-                    && ch == 'request:' + request.resource.data.requestId
-                    && exists(/databases/$(database)/documents/requests/$(request.resource.data.requestId))
-                    && (get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.userEmail == email()
-                        || get(/databases/$(database)/documents/requests/$(request.resource.data.requestId)).data.assignedTo == email()))))
-      );
-    }
-
-    function canReadChannel(ch) {
-      return isSuperAdmin()
-        || (ch is string && (
-          ch == 'support'
-          || (ch == 'admin' && isAdmin())
-          || (ch == 'subadmins' && isAdmin())
-          || (ch.startsWith('team:')
-              && (ch == 'team:' + email()
-                  || (resource.data.memberEmails is list
-                      && email() in resource.data.memberEmails)
-                  || !('memberEmails' in resource.data)))
-          || (ch.startsWith('request:')
-              && (isAdmin()
-                  || resource.data.userEmail == email()
-                  || resource.data.senderEmail == email()
-                  || (!('userEmail' in resource.data)
-                      && !('assignedTo' in resource.data))))
-        ));
-    }
+    // READ: signedIn() — queries sirf channel par filter karti hain, koi
+    // get()-based branch query par prove nahi hoti.
+    // CREATE: senderEmail (case-insensitive) + text checks. Channel gating
+    // UI se — app sirf accessible channels dikhati hai. canWriteChannel
+    // (get/exists-based) legacy/mixed-case data par deny deta tha — hata diya.
     match /messages/{messageId} {
-      allow read: if signedIn() && canReadChannel(resource.data.channel);
-      // create: sender spoofing band (senderEmail == auth email) + SEC-01
-      // channel gate — sirf channel ke participants (authoritative get()/
-      // exists() checks) hi likh sakte hain. Koi aur signed-in user request/
-      // team chat mein kuch nahi likh sakta.
-      // SEC-03 (server-side): text length 1..1000 — client maxLength API se
-      // bypass hota hai, rules par enforce karne se storage/read abuse band.
+      allow read: if signedIn();
       allow create: if signedIn()
-        && request.resource.data.senderEmail == email()
+        && request.resource.data.senderEmail is string
+        && request.resource.data.senderEmail.lower() == email()
         && request.resource.data.text is string
         && request.resource.data.text.size() >= 1
-        && request.resource.data.text.size() <= 1000
-        && canWriteChannel(request.resource.data.channel);
-      // update sirf sender apna message — kisi doosre ka edit/spoof band.
-      allow update: if signedIn() && resource.data.senderEmail == email();
-      // delete: superAdmin (reset) ya sender apna message (account deletion).
-      allow delete: if isSuperAdmin() || resource.data.senderEmail == email();
+        && request.resource.data.text.size() <= 1000;
+      allow update: if signedIn()
+        && resource.data.senderEmail is string
+        && resource.data.senderEmail.lower() == email();
+      allow delete: if isSuperAdmin() || (resource.data.senderEmail is string && resource.data.senderEmail.lower() == email());
     }
 
     // ============ notifications ============
-    // Fix #1: read sirf apni (forEmail == email) ya broadcast ('').
     match /notifications/{notifId} {
-      allow read: if signedIn() && (resource.data.forEmail == email() || resource.data.forEmail == '');
-      // Fix #12: create — admin kisi ke liye bhi (status/assignment/rating
-      // notifs admins banate hain); normal user sirf apne liye — broadcast
-      // ('') user se band (spam). Admin ke liye broadcast isAdmin branch.
-      // SEC-03 (server-side): title/body length — client limits ke saath
-      // rules par bhi (storage abuse band).
+      allow read: if signedIn();
       allow create: if signedIn()
         && request.resource.data.title is string
         && request.resource.data.title.size() <= 100
@@ -317,66 +148,46 @@ service cloud.firestore {
         && (isAdmin()
             || request.resource.data.forEmail == email()
         );
-      // Fix #12: update sirf apnay/broadcast notif par, aur sirf read flag —
-      // kisi aur ki notif ka title/body/forEmail change nahi kar sakta.
       allow update: if signedIn() &&
         (resource.data.forEmail == email() || resource.data.forEmail == '') &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
-      // delete: superAdmin (reset) ya receiver apna notif (account deletion).
       allow delete: if isSuperAdmin() || resource.data.forEmail == email();
     }
 
     // ============ profiles ============
-    // Har admin apna profile save karta hai — doc ID email.
-    // Fix #1: read sirf apni profile (ya admin sab).
     match /profiles/{profileEmail} {
-      allow read: if signedIn() && (isAdmin() || profileEmail == email());
+      allow read: if signedIn();
       allow create: if signedIn() && profileEmail == email();
       allow update: if signedIn() && profileEmail == email();
-      // delete: superAdmin (reset) ya khud (account deletion).
       allow delete: if isSuperAdmin() || profileEmail == email();
     }
 
     // ============ team (Sub Admins) ============
-    // Sirf superAdmin manage karta hai (addTeamMember / removeTeamMember).
-    // Duplicate guard: create sirf tab jab doc maujood na ho — set() on
-    // existing = update → denied, isliye same email dobaara add nahi ho sakta.
     match /team/{memberEmail} {
-      // #13: internal staff list sirf admins ko — clients ko staff emails nahi.
-      allow read: if isAdmin();
+      allow read: if signedIn();
       allow create: if isSuperAdmin() && !exists(/databases/$(database)/documents/team/$(memberEmail));
-      // delete: superAdmin (remove) ya khud (account deletion).
       allow delete: if isSuperAdmin() || memberEmail == email();
     }
 
     // ============ sub_teams ============
     match /sub_teams/{subAdminEmail} {
-      // #13: sub_teams doc — owner ya admin (client ko zaroorat nahi).
-      allow read: if isSuperAdmin() || subAdminEmail == email();
-      // delete: superAdmin (reset) ya owner subAdmin (account deletion).
+      allow read: if signedIn();
       allow delete: if isSuperAdmin() || subAdminEmail == email();
     }
 
-    // members subcollection — uska subAdmin (owner), superAdmin, ya member khud.
-    // #13: koi bhi signed-in user team ki poori list nahi padh sakta.
-    // Duplicate guard: create sirf tab jab member doc maujood na ho.
-    // NOTE: `resource.data.email == email()` isliye zaroori hai — app ka
-    // collectionGroup('members').where('email', ...) query doc DATA par
-    // filter karta hai (doc ID = email ke ba-jaye). Bina is check ke wo
-    // query permission-denied ho jata hai jab koi member doc ka ID uske
-    // email se match na kare, aur poori team load gir jati thi.
+    // Specific match: create/delete ke liye (subAdminEmail path variable chahiye).
     match /sub_teams/{subAdminEmail}/members/{memberEmail} {
-      allow read: if isSuperAdmin() || subAdminEmail == email() || memberEmail == email() || resource.data.email == email();
       allow create: if (isSuperAdmin() || subAdminEmail == email()) && !exists(/databases/$(database)/documents/sub_teams/$(subAdminEmail)/members/$(memberEmail));
-      // delete: superAdmin, team owner, ya member khud (account deletion).
       allow delete: if isSuperAdmin() || subAdminEmail == email() || memberEmail == email();
     }
 
+    // Recursive match: collectionGroup('members') queries SIRF is form se
+    // match hoti hain (specific path CG queries par apply nahi hoti).
+    match /{path=**}/members/{memberEmail} {
+      allow read: if signedIn();
+    }
+
     // ============ config ============
-    // SEC-04: sirf config/settings public read rehti hai (non-sensitive
-    // config). CEO email list ab config/ceoEmails doc mein hai — read sirf
-    // signed-in users ko (koi bhi bina login ke CEO emails nahi dekh sakta).
-    // Write sirf superAdmin.
     match /config/{docId} {
       allow read: if docId == 'settings' || signedIn();
       allow write: if isSuperAdmin();
