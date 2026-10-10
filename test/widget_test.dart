@@ -8,7 +8,7 @@ import 'package:solar_company_project/screens/login_screen.dart';
 void main() {
   testWidgets('Login screen renders with email/password form',
       (WidgetTester tester) async {
-    // LocalStorage (shared_preferences) ko test-mode mein mock karo.
+    // Mock LocalStorage (shared_preferences) in test mode.
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(
@@ -16,11 +16,11 @@ void main() {
         child: MaterialApp(home: LoginScreen()),
       ),
     );
-    // Repositories initialize hone den (Firebase is test env mein available
-    // nahi — _safeLoad use fail hone par empty state dega, UI phir bhi dikhega).
+    // Let the repositories initialize (Firebase is not available in this test
+    // environment — _safeLoad swallows that failure and the UI still renders).
     await tester.pump();
 
-    expect(find.text('Solar Company'), findsOneWidget);
+    expect(find.text('MFES'), findsOneWidget);
     expect(find.text('Login'), findsOneWidget);
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);

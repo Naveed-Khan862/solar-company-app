@@ -36,6 +36,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.initState();
     // Set the current user in provider
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Stream provider (authUserProvider) handles user resolution automatically.
+      // Keep legacy setter for backward compat with any remaining sync reads.
       ref.read(currentUserProvider.notifier).state = widget.user;
       // Data loads after login (Firestore requires authentication).
       ref.invalidate(initializeRepositoriesProvider);
@@ -60,11 +62,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _logout() {
+    // Stream provider handles logout automatically.
     ref.read(currentUserProvider.notifier).state = null;
     // NOTE: SecureCredentials intentionally NOT cleared here — fingerprint
-    // login ka poora maqsad hai ke logout ke baad bhi fingerprint se login
-    // ho sake. Credentials sirf Settings mein fingerprint OFF karne par
-    // clear hote hain (settings_screen.dart).
+    // The whole point of login is that fingerprint login still works after
+    // logout. Credentials are cleared only when fingerprint is turned OFF
+    // in Settings (settings_screen.dart).
     AuthService.signOut();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const LoginScreen()),

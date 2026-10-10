@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/service_request.dart';
 import '../models/user.dart';
 import '../providers.dart';
+import '../widgets/async_state_view.dart';
 import 'my_requests_screen.dart';
 import 'reports_screen.dart';
 import 'request_detail_screen.dart';
@@ -21,7 +22,7 @@ class AdminRequestsScreen extends ConsumerStatefulWidget {
 class _AdminRequestsScreenState extends ConsumerState<AdminRequestsScreen> {
   Future<void> _setStatus(ServiceRequest r, RequestStatus s) async {
     await ref.read(requestRepositoryProvider).updateStatus(r.id, s);
-    ref.invalidate(adminRequestsProvider);
+    ref.invalidate(scopedRequestsAsyncProvider(widget.user));
     ref.invalidate(pendingCountProvider);
     ref.invalidate(inProgressCountProvider);
     ref.invalidate(resolvedCountProvider);
@@ -36,12 +37,12 @@ class _AdminRequestsScreenState extends ConsumerState<AdminRequestsScreen> {
         ),
       ),
     );
-    ref.invalidate(adminRequestsProvider);
+    ref.invalidate(scopedRequestsAsyncProvider(widget.user));
   }
 
   @override
   Widget build(BuildContext context) {
-    final requests = ref.watch(adminRequestsProvider(widget.user));
+    final asyncReq = ref.watch(scopedRequestsAsyncProvider(widget.user));
     final statusFilter = ref.watch(adminStatusFilterProvider);
 
     return Scaffold(
@@ -49,7 +50,25 @@ class _AdminRequestsScreenState extends ConsumerState<AdminRequestsScreen> {
       body: Column(
         children: [
           _filters(statusFilter),
-          Expanded(child: _list(requests)),
+          Expanded(
+            child: asyncReq.when(
+              loading: () => const LoadingView(),
+              error: (e, st) => ErrorRetryView(
+                error: e,
+                message: 'Load failed',
+                onRetry: () => ref
+                    .read(scopedRequestsAsyncProvider(widget.user).notifier)
+                    .refresh(widget.user),
+              ),
+              data: (all) {
+                final filtered = all.where((r) {
+                  if (statusFilter != null && r.status != statusFilter) return false;
+                  return true;
+                }).toList();
+                return _list(filtered);
+              },
+            ),
+          ),
         ],
       ),
     );

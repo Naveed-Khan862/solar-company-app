@@ -28,8 +28,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   Future<void> _exportCsv(WidgetRef ref, BuildContext context, List<ServiceRequest> requests) async {
     final messenger = ScaffoldMessenger.of(context);
     String _escapeCsv(String s) {
-      // Formula injection (Fix #8): Excel mein `=`, `+`, `-`, `@` se shuru
-      // hone wale cells formula ban jate hain — prefix `'` se neutralize karo.
+      // Formula injection (Fix #8): in Excel, cells starting with `=`, `+`, `-`, `@`
+      // become formulas — neutralize them with a `'` prefix.
       var out = s;
       if (out.startsWith('=') ||
           out.startsWith('+') ||
@@ -52,11 +52,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     }
     final now = DateTime.now();
     final file = File(
-        '${Directory.systemTemp.path}/solar_report_${now.day}_${now.month}_${now.year}_${now.hour}${now.minute}${now.second}.csv');
+        '${Directory.systemTemp.path}/mfes_report_${now.day}_${now.month}_${now.year}_${now.hour}${now.minute}${now.second}.csv');
     await file.writeAsString(buffer.toString());
     await Share.shareXFiles(
       [XFile(file.path, mimeType: 'text/csv')],
-      subject: 'Solar Reports',
+      subject: 'MFES Reports',
     );
     messenger.showSnackBar(
       SnackBar(
@@ -74,19 +74,20 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = ref.watch(currentUserProvider);
+    final user = ref.watch(currentUser);
     if (user == null) {
       return const Center(child: CircularProgressIndicator(color: Color(0xFF00A86B)));
     }
-    
+
     final requests = widget.subAdminScope
-        ? ref.watch(weeklyChartDataProvider(user))
+        ? ref.watch(scopedRequestsAsyncProvider(user)).valueOrNull ?? []
         : ref.watch(allRequestsProvider);
     final total = requests.length;
-    final pending = ref.watch(pendingCountProvider(user));
-    final inProgress = ref.watch(inProgressCountProvider(user));
-    final resolved = ref.watch(resolvedCountProvider(user));
-    final avgRating = ref.watch(avgRatingProvider(user));
+    final pending = requests.where((r) => r.status == RequestStatus.pending).length;
+    final inProgress = requests.where((r) => r.status == RequestStatus.inProgress).length;
+    final resolved = requests.where((r) => r.status == RequestStatus.resolved).length;
+    final ratedList = requests.where((r) => r.isRated).map((r) => r.rating).toList();
+    final avgRating = ratedList.isEmpty ? 0.0 : ratedList.reduce((a, b) => a + b) / ratedList.length;
 
     return Scaffold(
       body: AppBackground(

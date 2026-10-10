@@ -103,7 +103,7 @@ class _NewRequestScreenState extends ConsumerState<NewRequestScreen> {
       status: RequestStatus.pending,
       createdAt: DateTime.now(),
     );
-    // SEC-03: add() throttle/error message return karta hai (null = success).
+    // SEC-03: add() returns a throttle/error message (null = success).
     final error = await ref.read(requestRepositoryProvider).add(request);
     if (!mounted) return;
     if (error != null) {
@@ -407,7 +407,7 @@ class _NewRequestScreenState extends ConsumerState<NewRequestScreen> {
                         child: TextField(
                           controller: _descriptionController,
                           maxLines: 4,
-                          // Fix #11: length limit — quota abuse se bachao.
+                          // Fix #11: length limit — guards against quota abuse.
                           maxLength: 2000,
                           style: TextStyle(color: AppPalette.textPrimary),
                           decoration: InputDecoration(

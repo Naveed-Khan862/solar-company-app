@@ -45,16 +45,16 @@ class _SolarCompanyAppState extends ConsumerState<SolarCompanyApp> {
       ).timeout(const Duration(seconds: 15));
       AuthService.markConfigured();
 
-      // App Check — bots/scripts ko Firestore se rokta hai. Debug builds
-      // debug provider use karte hain (token logcat mein aata hai → console
-      // mein "Manage debug tokens" se add karo); release Play Integrity.
+      // App Check — blocks bots/scripts from reaching Firestore. Debug builds
+      // use the debug provider (its token shows up in logcat → add it in the
+      // console under "Manage debug tokens"); release uses Play Integrity.
       await FirebaseAppCheck.instance.activate(
         androidProvider:
             kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
       );
 
-      // Crashlytics — production crashes report karta hai (free, Spark par
-      // bhi chalta hai). Flutter (UI) + platform/Dart errors dono catch.
+      // Crashlytics — reports production crashes (free, it works on the Spark
+      // plan too). Catches both Flutter (UI) and platform/Dart errors.
       final crashlytics = FirebaseCrashlytics.instance;
       FlutterError.onError = crashlytics.recordFlutterFatalError;
       PlatformDispatcher.instance.onError = (error, stack) {
@@ -84,7 +84,7 @@ class _SolarCompanyAppState extends ConsumerState<SolarCompanyApp> {
     final dark = ref.watch(themeControllerProvider);
 
     return MaterialApp(
-      title: 'Solar Company',
+      title: 'MFES',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),

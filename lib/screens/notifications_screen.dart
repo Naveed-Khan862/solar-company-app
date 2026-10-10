@@ -117,7 +117,7 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
                         icon: const Icon(Icons.done_all_rounded,
                             size: 17, color: Color(0xFF00A86B)),
                         label: const Text(
-                          'Sab padh li',
+                          'Mark all read',
                           style: TextStyle(
                               color: Color(0xFF00A86B),
                               fontSize: 12.5,

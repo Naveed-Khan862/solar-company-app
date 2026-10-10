@@ -26,7 +26,7 @@ bool isValidPhone(String phone) {
 }
 
 /// Validates password strength
-/// SEC-05: min 8 (Firebase Console password policy bhi 8 par set karo —
+/// SEC-05: min 8 (also set the Firebase Console password policy to 8 —
 /// Authentication → Settings → Password policy).
 bool isValidPassword(String password) {
   return password.length >= 8;

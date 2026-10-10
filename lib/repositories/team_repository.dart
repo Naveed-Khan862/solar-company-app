@@ -24,29 +24,34 @@ class TeamRepository {
   List<UserModel> subTeamOf(String email) => List.unmodifiable(_subTeams[email] ?? const []);
   Map<String, List<UserModel>> get subTeams => Map.unmodifiable(_subTeams);
 
-  /// #13 (privacy): team lists sirf woh load hoti hain jo user access kar
-  /// sakta hai — superAdmin → sab; subAdmin → apni team; member (normal
-  /// user) → sirf woh sub_teams jahan wo member hai (collectionGroup).
-  /// Rest of the app (chat channels, team_view) inhi scoped lists se chalta
-  /// hai, isliye UI pe koi farq nahi aata.
+  /// #13 (privacy): only the team lists the user can access are loaded —
+  /// superAdmin → everything; subAdmin → their own team; a member (normal
+  /// user) → only the sub_teams they belong to (collectionGroup).
+  /// The rest of the app (chat channels, team_view) works off these scoped
+  /// lists, so the UI looks the same.
   ///
-  /// Har hissa ALAG try/catch mein hai: koi ek query fail ho (permission,
-  /// malformed doc, network) to poori team load na ruke. Jab tak `_bump()`
-  /// na ho, UI pehle wali (khali) list dikhati rehti hai — isliye finally
-  /// mein hamesha bump karte hain taake jo bhi load hua wo dikhe.
+  /// Each part sits in its own try/catch: if one query fails (permission,
+  /// malformed doc, network) the whole team load must not stop. Until `_bump()`
+  /// runs, the UI keeps showing the previous (empty) list — so we always
+  /// bump in finally so that whatever did load shows up.
   Future<void> load({required UserModel user}) async {
     if (_loaded) return;
     final db = FirebaseFirestore.instance;
     _team.clear();
     _subTeams.clear();
 
+    // The team (subAdmins) list loads for ALL roles — the chat
+    // participant staff list is built from it (before, it stayed empty
+    // for a subAdmin → sending to the admin/subadmins chat was denied).
+    try {
+      final teamSnap = await db.collection(Collections.team).get();
+      _team.addAll(teamSnap.docs.map((d) => _userFromJson(d.data())));
+    } catch (_) {
+      // permission/network — the team list stays empty, let the other steps run
+    }
+
     try {
       if (user.isSuperAdmin) {
-        // Sub Admins ki list — ye hi sab se zaroori hai. Fail ho to list
-        // khali rehti hai (rules/permission), lekin aage ke steps chalein.
-        final teamSnap = await db.collection(Collections.team).get();
-        _team.addAll(teamSnap.docs.map((d) => _userFromJson(d.data())));
-
         final stSnap = await db.collection(Collections.subTeams).get();
         for (final doc in stSnap.docs) {
           try {
@@ -59,7 +64,7 @@ class TeamRepository {
                 .map((d) => _userFromJson(d.data()))
                 .toList();
           } catch (_) {
-            // ek sub-team ke members fail hon to baqi sab load ho jayein
+            // if one sub-team's members fail, the rest should still load
           }
         }
       } else if (user.isSubAdmin) {
@@ -72,13 +77,13 @@ class TeamRepository {
             membersSnap.docs.map((d) => _userFromJson(d.data())).toList();
       }
     } catch (_) {
-      // team list hi fail ho to kuch load nahi hoga — neeche memberships
-      // try hota hai, aur finally bump hamesha hota hai.
+      // if the team list itself fails nothing loads — memberships are tried
+      // below, and the finally always bumps.
     }
 
-    // Normal user / subAdmin kisi department ka member — apni memberships
-    // collectionGroup se (rules: sirf apna member doc readable). Iska fail
-    // hona team list ko kharab nahi karta — isliye alag try/catch.
+    // A normal user / subAdmin belongs to some department — load their
+    // memberships from the collectionGroup (rules: own member doc only).
+    // A failure here does not break the team list — hence a separate try/catch.
     try {
       final myMemberships = await db
           .collectionGroup('members')
@@ -87,22 +92,22 @@ class TeamRepository {
       for (final d in myMemberships.docs) {
         final owner = d.reference.parent.parent!.id;
         final list = _subTeams[owner] ??= [];
-        // dedupe: subAdmin apni hi team ka member ho to double na aaye
+        // dedupe: a subAdmin who is also a member of their team must not repeat
         if (list.every((m) => m.email != user.email)) {
           list.add(_userFromJson(d.data()));
         }
       }
     } catch (_) {
-      // memberships n/a ya permission — team list pehle hi load ho chuki hai
+      // memberships n/a or permission — the team list has already loaded
     } finally {
       _loaded = true;
       _bump();
     }
   }
 
-  // users doc guarantee — role yahan se rules ke getRole() ko milta hai.
-  // Google login wale accounts ke liye bhi direct banta hai, "registered"
-  // check ki zaroorat nahi (admin khud decide karta hai).
+  // users doc guarantee — rules getRole() reads the role from here.
+  // It is created directly for Google-login accounts too, with no
+  // "registered" check needed (the admin decides that).
   Future<void> _ensureUserDoc(UserModel member, String role) async {
     await FirebaseFirestore.instance
         .collection(Collections.users)
@@ -115,9 +120,9 @@ class TeamRepository {
     }, SetOptions(merge: true));
   }
 
-  /// Email ka signup hua hai ya nahi — users doc par `signedUp: true` flag
-  /// (jo sirf login/signup par `_resolveUser` lagata hai). Bina flag ke doc
-  /// (provisioned/pending) ya missing doc = account nahi bana.
+  /// Whether the email has signed up — via the `signedUp: true` flag on the
+  /// users doc (only `_resolveUser` sets it, on login/signup). A doc without
+  /// the flag (provisioned/pending) or a missing doc = no account yet.
   Future<String?> _checkRegistered(String email) async {
     try {
       final doc = await FirebaseFirestore.instance
@@ -125,22 +130,21 @@ class TeamRepository {
           .doc(email.toLowerCase())
           .get();
       if (!doc.exists || doc.data()?['signedUp'] != true) {
-        return 'This email is not registered yet — ye email hamare data mein '
-            'abhi nahi hai, iska account abhi nahi bana. Pehle is email se '
-            'signup/login karein.';
+        return 'This email is not registered yet — no account exists for it. '
+            'Ask this person to sign up or log in with this email first.';
       }
       return null;
     } catch (_) {
-      return 'Network issue — signup check nahi ho saka. Please try again';
+      return 'Network issue — could not verify the sign-up status. Please try again';
     }
   }
 
   Future<String?> addTeamMember(UserModel member) async {
-    // Duplicate check: ek hi email dobaara subAdmin nahi ban sakta.
+    // Duplicate check: the same email cannot become a subAdmin twice.
     if (_team.any((u) => u.email == member.email)) {
       return 'This email is already in the team';
     }
-    // Sirf woh email add ho sakti hai jis ka account pehle se bana ho.
+    // Only an email that already has an account can be added.
     final notRegistered = await _checkRegistered(member.email);
     if (notRegistered != null) return notRegistered;
     try {
@@ -169,21 +173,21 @@ class TeamRepository {
         .collection(Collections.users)
         .doc(email.toLowerCase())
         .update({'role': 'user'});
-    // Removed subAdmin ki saari assigned requests unassign karo — warna wo
-    // requests uske naam par 'assigned' rehti hain aur removed user ko
-    // dikhti hain.
+    // Unassign all requests assigned to the removed subAdmin — otherwise they
+    // stay 'assigned' under their name and keep showing up for the removed
+    // user.
     await RequestRepository.instance.unassignAll(email);
     _team.removeWhere((u) => u.email == email);
     _bump();
   }
 
   Future<String?> addSubTeamMember(String subAdminEmail, UserModel member) async {
-    // Duplicate check: ek hi member dobaara team mein add nahi ho sakta.
+    // Duplicate check: the same member cannot be added to the team twice.
     final existing = _subTeams[subAdminEmail] ?? const [];
     if (existing.any((u) => u.email == member.email)) {
       return 'This member is already in your team';
     }
-    // Sirf woh email add ho sakti hai jis ka account pehle se bana ho.
+    // Only an email that already has an account can be added.
     final notRegistered = await _checkRegistered(member.email);
     if (notRegistered != null) return notRegistered;
     try {
@@ -239,17 +243,17 @@ class TeamRepository {
     'role': u.role.name,
   };
 
-  /// Defensive parse: koi ek purana/malformed doc (missing name/email/phone)
-  /// aaye to throw karne ki bajaye default values — warna ek bad doc poori
-  /// team list ko gira deta tha (addAll ke andar exception).
+  /// Defensive parse: any old/malformed doc (missing name/email/phone)
+  /// use default values instead of throwing — otherwise one bad doc took
+  /// down the whole team list (exception inside addAll).
   UserModel _userFromJson(Map<String, dynamic> json) => UserModel(
     name: (json['name'] ?? '').toString(),
     email: (json['email'] ?? '').toString(),
     phone: (json['phone'] ?? '').toString(),
     role: UserRole.values.firstWhere(
       (r) => r.name == json['role']?.toString(),
-      // Security: unknown/missing role hamesha 'user' — subAdmin default
-      // rakhtay to koi bhi missing-role doc elevate ho sakta tha.
+      // Security: an unknown/missing role is always 'user' — never defaulting
+      // to subAdmin, otherwise any doc missing a role could have been elevated.
       orElse: () => UserRole.user,
     ),
   );

@@ -1,6 +1,6 @@
-# Solar Company App
+# MFES App
 
-A Flutter service-management app for a solar energy company. Customers file service requests (complaints, inspections, panel washing), track their status, and rate completed work; sub-admins handle assigned requests; the admin manages the team and everything in between.
+A Flutter service-management app for MFES, a solar energy company. Customers file service requests (complaints, inspections, panel washing), track their status, and rate completed work; sub-admins handle assigned requests; the admin manages the team and everything in between.
 
 ## Features
 

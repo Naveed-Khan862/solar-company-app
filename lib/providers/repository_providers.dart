@@ -6,7 +6,6 @@ import '../repositories/notification_repository.dart';
 import '../repositories/profile_repository.dart';
 import '../repositories/request_repository.dart';
 import '../repositories/team_repository.dart';
-import '../services/local_db.dart';
 import 'ui_providers.dart';
 
 final localStorageProvider = Provider<LocalStorage>((ref) => LocalStorage.instance);
@@ -20,8 +19,6 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) => ChatRepository.
 final notificationRepositoryProvider = Provider<NotificationRepository>((ref) => NotificationRepository.instance);
 
 final profileRepositoryProvider = Provider<ProfileRepository>((ref) => ProfileRepository.instance);
-
-final localDbProvider = Provider<LocalDb>((ref) => LocalDb.instance);
 
 // Rebuild triggers — emitted whenever a repository mutates.
 final requestRevisionsProvider = StreamProvider<int>((ref) => ref.watch(requestRepositoryProvider).revision);
@@ -44,10 +41,10 @@ Future<void> _safeLoad(Future<void> Function() load) async {
 }
 
 final initializeRepositoriesProvider = FutureProvider<void>((ref) async {
-  final user = ref.read(currentUserProvider);
-  if (user == null) return;
-  // Scoped reads (Fix #1): naye user ke saath dobara load zaroori hai,
-  // warna purane user ka cached data dikhega. Isliye pehle reset karo.
+  final user = ref.read(currentUser);
+  if (user == null || user.email.isEmpty) return;
+  // Scoped reads (Fix #1): the data must be loaded again for the new user,
+  // otherwise the previous user's cached data shows. So reset first.
   ref.read(requestRepositoryProvider).resetLoaded();
   ref.read(teamRepositoryProvider).resetLoaded();
   ref.read(chatRepositoryProvider).resetLoaded();
@@ -63,8 +60,14 @@ final initializeRepositoriesProvider = FutureProvider<void>((ref) async {
           ),
     ),
   ]);
-  // Chat ki channels requests + team se derive hoti hain — isliye baad mein.
+  // Chat channels are derived from requests + team — so load them after.
   await _safeLoad(() => ref.read(chatRepositoryProvider).load(user: user));
+  // Readers backfill legacy messages (without participants) — the rules let
+  // only the CEO (superAdmin) do a participants-only update.
+  if (user.isSuperAdmin) {
+    await _safeLoad(
+        () => ref.read(chatRepositoryProvider).migrateLegacyParticipants());
+  }
   ref.read(notificationRepositoryProvider).unreadNotifier.value =
       ref.read(notificationRepositoryProvider).unreadCount;
 });

@@ -153,14 +153,14 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Sirf 2 minute lagenge',
+                            'Takes only 2 minutes',
                             style: TextStyle(
                                 color: AppPalette.textMuted, fontSize: 13),
                           ),
                           const SizedBox(height: 20),
                           _Field(
                             controller: _nameController,
-                            hint: 'Pura Naam',
+                            hint: 'Full Name',
                             icon: Icons.person_outline_rounded,
                           ),
                           const SizedBox(height: 14),
@@ -180,7 +180,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                           const SizedBox(height: 14),
                           _Field(
                             controller: _passwordController,
-                            hint: 'Password (min 6)',
+                            hint:                            'Password (min 8)',
                             icon: Icons.lock_outline_rounded,
                             obscure: _obscure,
                             suffix: IconButton(

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/service_request.dart';
 import '../models/user.dart';
 import '../providers.dart';
+import '../widgets/async_state_view.dart';
 import '../widgets/glass_tilt_card.dart';
 import 'new_request_screen.dart';
 import 'request_detail_screen.dart';
@@ -24,7 +25,7 @@ class _MyRequestsScreenState extends ConsumerState<MyRequestsScreen> {
       MaterialPageRoute(builder: (_) => NewRequestScreen(user: widget.user)),
     );
     if (created == true && mounted) {
-      ref.invalidate(userRequestsProvider);
+      ref.invalidate(scopedRequestsAsyncProvider(widget.user));
     }
   }
 
@@ -38,13 +39,13 @@ class _MyRequestsScreenState extends ConsumerState<MyRequestsScreen> {
       ),
     );
     if (mounted) {
-      ref.invalidate(userRequestsProvider);
+      ref.invalidate(scopedRequestsAsyncProvider(widget.user));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final requests = ref.watch(userRequestsProvider(widget.user));
+    final asyncReq = ref.watch(scopedRequestsAsyncProvider(widget.user));
     final categoryFilter = ref.watch(requestCategoryFilterProvider);
     final statusFilter = ref.watch(requestStatusFilterProvider);
 
@@ -53,7 +54,26 @@ class _MyRequestsScreenState extends ConsumerState<MyRequestsScreen> {
       body: Column(
         children: [
           _filters(categoryFilter, statusFilter),
-          Expanded(child: _list(requests)),
+          Expanded(
+            child: asyncReq.when(
+              loading: () => const LoadingView(),
+              error: (e, st) => ErrorRetryView(
+                error: e,
+                message: 'Failed to load data',
+                onRetry: () => ref
+                    .read(scopedRequestsAsyncProvider(widget.user).notifier)
+                    .refresh(widget.user),
+              ),
+              data: (all) {
+                final filtered = all.where((r) {
+                  if (categoryFilter != null && r.category != categoryFilter) return false;
+                  if (statusFilter != null && r.status != statusFilter) return false;
+                  return true;
+                }).toList();
+                return _list(filtered);
+              },
+            ),
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(

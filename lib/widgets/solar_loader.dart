@@ -90,7 +90,7 @@ class _SolarLoaderState extends State<SolarLoader>
                 colors: [Color(0xFF007A4D), Color(0xFF00B26B)],
               ).createShader(bounds),
               child: const Text(
-                'Solar Company',
+                'MFES',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,

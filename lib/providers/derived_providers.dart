@@ -1,15 +1,28 @@
-﻿import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/chat_message.dart';
 import '../models/service_request.dart';
 import '../models/user.dart';
-import '../services/local_db.dart';
+import '../repositories/team_repository.dart';
 import 'repository_providers.dart';
 import 'ui_providers.dart';
 
-final userRequestsProvider = Provider.family<List<ServiceRequest>, UserModel>((ref, user) {
+// ─────────────────────────────────────────────────────────────────────
+// Single source of truth for user-scoped requests.
+// Every provider that previously repeated
+//   isSuperAdmin → all / isSubAdmin → assignedTo / else → forUser
+// now just does:  ref.watch(scopedRequestsProvider(user))
+// ─────────────────────────────────────────────────────────────────────
+final scopedRequestsProvider = Provider.family<List<ServiceRequest>, UserModel>((ref, user) {
   ref.watch(requestRevisionsProvider);
-  final requests = ref.read(requestRepositoryProvider).forUser(user.email);
+  final repo = ref.read(requestRepositoryProvider);
+  if (user.isSuperAdmin) return repo.all;
+  if (user.isSubAdmin) return repo.assignedTo(user.email);
+  return repo.forUser(user.email);
+});
+
+final userRequestsProvider = Provider.family<List<ServiceRequest>, UserModel>((ref, user) {
+  final requests = ref.watch(scopedRequestsProvider(user));
   final categoryFilter = ref.watch(requestCategoryFilterProvider);
   final statusFilter = ref.watch(requestStatusFilterProvider);
 
@@ -21,10 +34,7 @@ final userRequestsProvider = Provider.family<List<ServiceRequest>, UserModel>((r
 });
 
 final adminRequestsProvider = Provider.family<List<ServiceRequest>, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final requests = user.role == UserRole.subAdmin
-      ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-      : ref.read(requestRepositoryProvider).all;
+  final requests = ref.watch(scopedRequestsProvider(user));
   final statusFilter = ref.watch(adminStatusFilterProvider);
 
   return requests.where((r) {
@@ -39,43 +49,25 @@ final allRequestsProvider = Provider<List<ServiceRequest>>((ref) {
 });
 
 final pendingCountProvider = Provider.family<int, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final scope = user.isSuperAdmin
-      ? ref.read(requestRepositoryProvider).all
-      : user.isSubAdmin
-          ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-          : ref.read(requestRepositoryProvider).forUser(user.email);
-  return scope.where((r) => r.status == RequestStatus.pending).length;
+  return ref.watch(scopedRequestsProvider(user))
+      .where((r) => r.status == RequestStatus.pending).length;
 });
 
 final inProgressCountProvider = Provider.family<int, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final scope = user.isSuperAdmin
-      ? ref.read(requestRepositoryProvider).all
-      : user.isSubAdmin
-          ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-          : ref.read(requestRepositoryProvider).forUser(user.email);
-  return scope.where((r) => r.status == RequestStatus.inProgress).length;
+  return ref.watch(scopedRequestsProvider(user))
+      .where((r) => r.status == RequestStatus.inProgress).length;
 });
 
 final resolvedCountProvider = Provider.family<int, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final scope = user.isSuperAdmin
-      ? ref.read(requestRepositoryProvider).all
-      : user.isSubAdmin
-          ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-          : ref.read(requestRepositoryProvider).forUser(user.email);
-  return scope.where((r) => r.status == RequestStatus.resolved).length;
+  return ref.watch(scopedRequestsProvider(user))
+      .where((r) => r.status == RequestStatus.resolved).length;
 });
 
 final avgRatingProvider = Provider.family<double, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final scope = user.isSuperAdmin
-      ? ref.read(requestRepositoryProvider).all
-      : user.isSubAdmin
-          ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-          : ref.read(requestRepositoryProvider).forUser(user.email);
-  final rated = scope.where((r) => r.isRated).map((r) => r.rating).toList();
+  final rated = ref.watch(scopedRequestsProvider(user))
+      .where((r) => r.isRated)
+      .map((r) => r.rating)
+      .toList();
   if (rated.isEmpty) return 0;
   return rated.reduce((a, b) => a + b) / rated.length;
 });
@@ -127,17 +119,68 @@ final messagesProvider = Provider.family<List<ChatMessage>, String>((ref, channe
 
 final channelsProvider = Provider.family<List<ChatChannelInfo>, UserModel>((ref, user) {
   ref.watch(teamRevisionsProvider);
-  return ref.read(localDbProvider).channelsFor(user);
+  final teamRepo = ref.read(teamRepositoryProvider);
+  return _channelsFor(user, teamRepo);
 });
 
+/// Build channel list for a user — moved from LocalDb.channelsFor.
+List<ChatChannelInfo> _channelsFor(UserModel user, TeamRepository teamRepo) {
+  final result = <ChatChannelInfo>[
+    const ChatChannelInfo(
+      id: 'support',
+      title: 'Support Chat',
+      subtitle: 'CEO \u00b7 Sub Admins \u00b7 Clients',
+    ),
+  ];
+  if (user.isAdmin) {
+    result.add(const ChatChannelInfo(
+      id: 'admin',
+      title: 'Admin Chat',
+      subtitle: 'CEO and Sub Admins only',
+    ));
+  }
+  if (user.role == UserRole.subAdmin) {
+    result.add(const ChatChannelInfo(
+      id: 'subadmins',
+      title: 'Sub Admin Chat',
+      subtitle: 'Sub Admins only',
+    ));
+    final subTeam = teamRepo.subTeamOf(user.email);
+    if (subTeam.isNotEmpty) {
+      result.add(ChatChannelInfo(
+        id: 'team:${user.email}',
+        title: 'My Team Chat',
+        subtitle: '${subTeam.length} members',
+      ));
+    }
+  }
+  for (final entry in teamRepo.subTeams.entries) {
+    if (entry.value.any((m) => m.email == user.email)) {
+      result.add(ChatChannelInfo(
+        id: 'team:${entry.key}',
+        title: 'Team Chat',
+        subtitle: 'Team of ${entry.key}',
+      ));
+    }
+  }
+  return result;
+}
+
+/// Chat channel metadata.
+class ChatChannelInfo {
+  final String id;
+  final String title;
+  final String subtitle;
+
+  const ChatChannelInfo({
+    required this.id,
+    required this.title,
+    required this.subtitle,
+  });
+}
+
 final weeklyChartDataProvider = Provider.family<List<ServiceRequest>, UserModel>((ref, user) {
-  ref.watch(requestRevisionsProvider);
-  final scope = user.isSuperAdmin
-      ? ref.read(requestRepositoryProvider).all
-      : user.isSubAdmin
-          ? ref.read(requestRepositoryProvider).assignedTo(user.email)
-          : ref.read(requestRepositoryProvider).forUser(user.email);
-  return scope;
+  return ref.watch(scopedRequestsProvider(user));
 });
 
 

@@ -80,14 +80,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
 
     await ref.read(profileRepositoryProvider).setLastEmail(email);
-    // Fingerprint login ke liye password encrypted store mein save karo
-    // (har email login par refresh hota hai). Login kabhi fail na ho isliye
-    // try/catch — storage error aaye to login phir bhi proceed.
+    // Save the password in the encrypted store for fingerprint login
+    // (refreshed on every email login). So that login never fails there is a
+    // try/catch — if storage errors, login still proceeds.
     if (password.isNotEmpty) {
       try {
         await SecureCredentials.save(email, password);
       } catch (_) {
-        // secure storage fail ho to fingerprint agle email login par retry karega.
+        // if secure storage fails, fingerprint retries on the next email login.
       }
     }
     if (!mounted) return;
@@ -135,7 +135,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         return;
       }
       final ok = await auth.authenticate(
-        localizedReason: 'Solar Company login fingerprint',
+        localizedReason: 'MFES login fingerprint',
         options: const AuthenticationOptions(biometricOnly: true),
       );
       if (!ok || !mounted) return;
@@ -143,7 +143,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (cred == null) {
         setState(
           () => _error =
-              'Fingerprint login need a password — login with email first',
+              'Fingerprint login needs a password — log in with email first',
         );
         return;
       }
@@ -189,7 +189,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         colors: [Color(0xFF007A4D), Color(0xFF00B26B)],
                       ).createShader(bounds),
                       child: const Text(
-                        'Solar Company',
+                        'MFES',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 28,

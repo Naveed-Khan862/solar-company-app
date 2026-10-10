@@ -11,8 +11,8 @@ plugins {
 }
 
 // Play Store release signing — android/key.properties + app/upload-keystore.jks.
-// Dono files .gitignore mein hain (secret). Agar missing hon to debug signing
-// fallback hota hai taake `flutter run --release` na toote.
+// Both files are in .gitignore (secret). If they are missing, debug signing is
+// used as a fallback so that `flutter run --release` does not break.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {

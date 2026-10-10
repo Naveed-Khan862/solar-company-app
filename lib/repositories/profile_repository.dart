@@ -35,15 +35,15 @@ class ProfileRepository {
     return (p?.phone != null && p!.phone!.isNotEmpty) ? p.phone! : fallback;
   }
 
-  /// Fix #1 (scoped reads): admin → sab profiles, normal user → sirf apni
-  /// profile (doc ID = email). Rules bhi yahi enforce karte hain.
+  /// Fix #1 (scoped reads): admin → all profiles, normal user → only their
+  /// own profile (doc ID = email). The rules enforce the same.
   Future<void> load({required UserModel user}) async {
     if (_loaded) return;
-    // Settings pehle load karo (LocalStorage) — Firestore se pehle, taake
-    // login screen par (auth se pehle) fingerprint/lastEmail available ho.
-    // Yeh bhi zaroori: settings load hotay hi _bump() karo taake cold start
-    // par providers update hon aur fingerprint button nazar aaye — warna
-    // (agar Firestore auth se pehle fail ho jaye) button kabhi nahi aata.
+    // Load settings first (LocalStorage) — before Firestore, so that
+    // fingerprint/lastEmail are available on the login screen (before auth).
+    // This matters too: bump right after settings load so that on cold start
+    // providers update and the fingerprint button shows — otherwise
+    // (if Firestore fails before auth) the button never appears.
     _settings = await LocalStorage.instance.getSettings();
     _bump();
     final db = FirebaseFirestore.instance;
@@ -92,17 +92,17 @@ class ProfileRepository {
     final user = FirebaseAuth.instance.currentUser;
     final email = user?.email;
     if (user == null || email == null) return;
-    // Old password verify karna zaroori hai — directly update karne se
-    // Firebase invalid-credential dega, aur user ko pata hi nahi chalta.
+    // The old password must be verified — updating directly would make
+    // Firebase return invalid-credential, and the user would never know.
     final credential =
         EmailAuthProvider.credential(email: email, password: oldPassword);
     await user.reauthenticateWithCredential(credential);
     await user.updatePassword(newPassword);
   }
 
-  // Har setter disk ki current settings par ek hi field badalta hai — koi
-  // setter doosri setting wipe nahi kar sakta, aur off-on dono sahi save
-  // hote hain.
+  // Every setter changes one field on the current on-disk settings, so no
+  // setter can wipe another setting, and both off and on are saved
+  // correctly.
   Future<void> setFingerprint(bool enabled) async {
     _settings =
         (await LocalStorage.instance.getSettings()).copyWith(fingerprint: enabled);

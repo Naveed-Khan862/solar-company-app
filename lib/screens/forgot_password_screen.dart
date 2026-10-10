@@ -38,8 +38,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     });
 
     try {
-      // FirebaseAuth khud user-not-found error deta hai — Firestore pre-auth
-      // read nahi karte (rules allow nahi karti).
+      // FirebaseAuth itself returns user-not-found — we do not read Firestore
+      // pre-auth (the rules do not allow it).
       final err = await AuthService.sendPasswordReset(email);
       if (!mounted) return;
       if (err != null) {

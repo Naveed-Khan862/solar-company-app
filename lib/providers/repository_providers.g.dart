@@ -97,20 +97,6 @@ final profileRepositoryProvider = Provider<ProfileRepository>.internal(
 );
 
 typedef ProfileRepositoryRef = ProviderRef<ProfileRepository>;
-String _$localDbHash() => r'bd4883a92b02c990853fe2dc9bb92ae5ac14776d';
-
-/// See also [localDb].
-@ProviderFor(localDb)
-final localDbProvider = Provider<LocalDb>.internal(
-  localDb,
-  name: r'localDbProvider',
-  debugGetCreateSourceHash:
-      const bool.fromEnvironment('dart.vm.product') ? null : _$localDbHash,
-  dependencies: null,
-  allTransitiveDependencies: null,
-);
-
-typedef LocalDbRef = ProviderRef<LocalDb>;
 String _$initializeRepositoriesHash() =>
     r'6d581faeed7142d49ecfec27cec57e0c7f46fcec';
 

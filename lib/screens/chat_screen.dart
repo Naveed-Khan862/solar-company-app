@@ -8,6 +8,7 @@ import '../repositories/request_repository.dart';
 import '../repositories/team_repository.dart';
 import '../utils/ids.dart';
 import '../widgets/app_background.dart';
+import '../widgets/async_state_view.dart';
 import '../widgets/chat_parts.dart';
 import '../theme/app_theme.dart';
 
@@ -47,7 +48,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     } catch (_) {
       // permission/network issue - empty state dikhega
     }
-    if (mounted) ref.invalidate(messagesProvider(widget.channel));
+    if (mounted) ref.invalidate(chatMessagesAsyncProvider(widget.channel));
   }
 
   @override
@@ -66,8 +67,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  /// Request doc se owner email — chat send par message mein denormalize
-  /// karne ke liye (rules get() ke bina yahi padhti hain).
+  /// Owner email from the request doc — denormalized into the message when
+  /// sending on chat (the rules read this without get()).
   String? _requestUserEmail(String requestId) {
     for (final r in RequestRepository.instance.all) {
       if (r.id == requestId) return r.userEmail;
@@ -96,7 +97,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           senderName: displayName,
           text: text,
           sentAt: DateTime.now(),
-          // Rules ki read gate in fields par chalti hai (get() ke bina).
+          // The rules' read gate relies on these fields (without get()).
           // team:{owner} → ownerEmail + memberEmails; request:{id} → userEmail + assignedTo.
           ownerEmail: widget.channel.startsWith('team:')
               ? widget.channel.substring(5)
@@ -113,20 +114,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           assignedTo: widget.channel.startsWith('request:')
               ? _requestAssignedTo(widget.channel.substring(8))
               : null,
-          // SEC-01 v2: rules channel parse nahi karti — requestId se doc path.
+          // SEC-01 v2: rules do not parse the channel — doc path comes from requestId.
           requestId: widget.channel.startsWith('request:')
               ? widget.channel.substring(8)
               : null,
         ),
       );
     } catch (e) {
-      // Silent fail na ho — text restore karke asli error dikhao.
+      // No silent failure — restore the text and show the real error.
       _chatController.text = text;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Message send nahi hua — $e',
+            'Message could not be sent — $e',
             style: const TextStyle(color: Colors.white),
           ),
           backgroundColor: const Color(0xFFD32F2F),
@@ -136,13 +137,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     if (!mounted) return;
-    ref.invalidate(messagesProvider(widget.channel));
+    ref.invalidate(chatMessagesAsyncProvider(widget.channel));
     _scrollToBottom();
   }
 
   @override
   Widget build(BuildContext context) {
-    final messages = ref.watch(messagesProvider(widget.channel));
+    final asyncMsgs = ref.watch(chatMessagesAsyncProvider(widget.channel));
     return Scaffold(
       body: AppBackground(
         child: SafeArea(
@@ -174,26 +175,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
               ),
               Expanded(
-                child: ListView(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  children: [
-                    if (messages.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Text(
-                          'No messages yet\nSend the first message',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: AppPalette.textMuted, fontSize: 13),
+                child: asyncMsgs.when(
+                  loading: () => const LoadingView(),
+                  error: (e, st) => ErrorRetryView(
+                    error: e,
+                    message: 'Messages could not be loaded',
+                    onRetry: () => ref
+                        .read(chatMessagesAsyncProvider(widget.channel).notifier)
+                        .refresh(widget.channel),
+                  ),
+                  data: (messages) => ListView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    children: [
+                      if (messages.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            'No messages yet\nSend the first message',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                color: AppPalette.textMuted, fontSize: 13),
+                          ),
                         ),
-                      ),
-                    for (final m in messages)
-                      ChatBubble(
-                        message: m,
-                        mine: m.senderEmail == widget.user.email,
-                      ),
-                  ],
+                      for (final m in messages)
+                        ChatBubble(
+                          message: m,
+                          mine: m.senderEmail == widget.user.email,
+                        ),
+                    ],
+                  ),
                 ),
               ),
               ChatInputBar(

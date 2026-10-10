@@ -1,0 +1,264 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+
+    // ============ Helpers ============
+
+    function email() {
+      return request.auth.token.email.lower();
+    }
+
+    function getRole(em) {
+      return exists(/databases/$(database)/documents/users/$(em))
+        ? get(/databases/$(database)/documents/users/$(em)).data.role
+        : 'user';
+    }
+
+    function roleOf() {
+      return getRole(email());
+    }
+
+    function isCEO() {
+      return (exists(/databases/$(database)/documents/config/ceoEmails)
+          && ((get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is list
+              && email() in get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails)
+              || (get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is string
+                  && get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails.lower() == email())))
+        || (exists(/databases/$(database)/documents/config/settings)
+          && ((get(/databases/$(database)/documents/config/settings).data.ceoEmails is list
+              && email() in get(/databases/$(database)/documents/config/settings).data.ceoEmails)
+              || (get(/databases/$(database)/documents/config/settings).data.ceoEmails is string
+                  && get(/databases/$(database)/documents/config/settings).data.ceoEmails.lower() == email()))));
+    }
+
+    function isSuperAdmin() {
+      return roleOf() == 'superAdmin' || isCEO();
+    }
+
+    function isSubAdmin() {
+      return roleOf() == 'subAdmin';
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || isSubAdmin();
+    }
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function emailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+
+    // ============ CEO & Config ============
+
+    function ceoEmailsList() {
+      return (exists(/databases/$(database)/documents/config/ceoEmails)
+          && get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is list)
+        ? get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails
+        : (exists(/databases/$(database)/documents/config/ceoEmails)
+            && get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is string)
+          ? [get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails.lower()]
+          : (exists(/databases/$(database)/documents/config/settings)
+              && get(/databases/$(database)/documents/config/settings).data.ceoEmails is list)
+            ? get(/databases/$(database)/documents/config/settings).data.ceoEmails
+            : []);
+    }
+
+
+    // ============ Requests ============
+
+    match /requests/{requestId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (isAdmin() || emailVerified())
+        && request.resource.data.userEmail == email()
+        && request.resource.data.id == requestId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.assignedTo == ''
+        && request.resource.data.assignedByName == ''
+        && request.resource.data.category in ['complaint', 'inspection', 'panelWashing']
+        && request.resource.data.priority in ['Normal', 'Urgent']
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 2000
+        && (!('address' in request.resource.data)
+            || (request.resource.data.address is string
+                && request.resource.data.address.size() <= 500))
+        && (!('phone' in request.resource.data)
+            || (request.resource.data.phone is string
+                && request.resource.data.phone.size() <= 20))
+        && request.resource.data.keys().hasOnly(['id', 'userEmail', 'userName',
+            'category', 'subCategory', 'priority', 'description', 'status',
+            'createdAt', 'assignedTo', 'assignedByName', 'address', 'phone']);
+      allow update: if signedIn() && (
+        isSuperAdmin()
+        || (resource.data.userEmail == email()
+            && !('rating' in resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'review', 'ratedAt']))
+        || (isSubAdmin() && resource.data.assignedTo == email()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+      );
+      allow delete: if isSuperAdmin() || resource.data.userEmail == email();
+    }
+
+
+    // ============ users ============
+    match /users/{userEmail} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (
+        (request.resource.data.email == email() && request.resource.data.role == 'user')
+        || (isSuperAdmin() && request.resource.data.role in ['user', 'subAdmin'])
+        || (isSubAdmin() && request.resource.data.role == 'user')
+        || (isCEO() && request.resource.data.email == email())
+      );
+      allow update: if signedIn() && (
+        (request.resource.data.email == email() && request.resource.data.role == roleOf())
+        || (isSuperAdmin() && request.resource.data.role in ['user', 'subAdmin'])
+        || (isSubAdmin() && request.resource.data.role == 'user')
+        || (isCEO() && request.resource.data.email == email())
+      );
+      allow delete: if signedIn() && (resource.data.email == email() || isSuperAdmin());
+    }
+
+
+    // ============ messages (chat) ============
+
+    match /messages/{messageId} {
+      // READ: Gate A (new with participants) || Gate B (legacy, superAdmin only)
+      allow read: if signedIn()
+        && ((resource.data.participants is list
+             && email() in resource.data.participants)
+            || (isSuperAdmin() && !(resource.data.participants is list)));
+
+      // CREATE: Authoritative channel gate + participant validation
+      allow create: if signedIn()
+        && request.resource.data.senderEmail is string
+        && request.resource.data.senderEmail.lower() == email()
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 1
+        && request.resource.data.text.size() <= 1000
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 1
+        && request.resource.data.participants.size() <= 40
+        && email() in request.resource.data.participants
+        && canSendToChannel(request.resource.data);
+    }
+
+
+    // ============ canSendToChannel ============
+
+    function canSendToChannel(c) {
+      return c.channel == 'support'
+        || (c.channel == 'admin' && isAdmin())
+        || (c.channel == 'subadmins' && isSubAdmin())
+        || (c.channel.startsWith('team:') && teamSenderOk(c))
+        || (c.channel.startsWith('request:') && requestSenderGateOk(c));
+    }
+
+
+    // ============ Request Sender Gate ============
+
+    function requestSenderOk(c) {
+      return (get(/databases/$(database)/documents/requests/$(c.requestId)).data.userEmail is string
+          && get(/databases/$(database)/documents/requests/$(c.requestId)).data.userEmail.lower() == c.senderEmail.lower())
+        || (get(/databases/$(database)/documents/requests/$(c.requestId)).data.assignedTo is string
+            && get(/databases/$(database)/documents/requests/$(c.requestId)).data.assignedTo.lower() == c.senderEmail.lower())
+        || getRole(email()) == 'superAdmin';
+    }
+
+    function requestSenderGateOk(c) {
+      return c.requestId is string
+        && c.channel == 'request:' + c.requestId
+        && exists(/databases/$(database)/documents/requests/$(c.requestId))
+        && requestSenderOk(c)
+        && requestParticipantsOk(c);
+    }
+
+
+    // ============ Request Participants Validation ============
+
+    function requestParticipantsOk(c) {
+      final List<String> required = [
+        c.senderEmail.lower(),
+        (get(/databases/$(database)/documents/requests/$(c.requestId)).data.userEmail.lower()),
+        (get(/databases/$(database)/documents/requests/$(c.requestId)).data.assignedTo.lower())
+      ];
+      final List<String> withCeo = required + ceoEmailsList();
+      return c.participants is list
+        && c.participants.size() >= 1
+        && c.participants.size() <= 4
+        && setDifference(c.participants, withCeo).size() == 0;
+    }
+
+
+    // ============ Team Channel ============
+
+    function teamSenderOk(c) {
+      final String subAdmin = c.channel.substring(5, c.channel.size()).lower();
+      return exists(/databases/$(database)/documents/sub_teams/$(subAdmin)/members/$(email()))
+        || subAdmin == email();
+    }
+
+
+    // ============ notifications ============
+    match /notifications/{notifId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.body is string
+        && request.resource.data.body.size() <= 500
+        && (isAdmin()
+            || request.resource.data.forEmail == email()
+        );
+      allow update: if signedIn() &&
+        (resource.data.forEmail == email() || resource.data.forEmail == '') &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isSuperAdmin() || resource.data.forEmail == email();
+    }
+
+
+    // ============ profiles ============
+    match /profiles/{profileEmail} {
+      allow read: if signedIn();
+      allow create: if signedIn() && profileEmail == email();
+      allow update: if signedIn() && profileEmail == email();
+      allow delete: if isSuperAdmin() || profileEmail == email();
+    }
+
+
+    // ============ team (Sub Admins) ============
+    match /team/{memberEmail} {
+      allow read: if signedIn();
+      allow create: if isSuperAdmin() && !exists(/databases/$(database)/documents/team/$(memberEmail));
+      allow delete: if isSuperAdmin() || memberEmail == email();
+    }
+
+
+    // ============ sub_teams ============
+    match /sub_teams/{subAdminEmail} {
+      allow read: if signedIn();
+      allow delete: if isSuperAdmin() || subAdminEmail == email();
+    }
+
+    // Specific match for create/delete (the subAdminEmail path variable is needed).
+    match /sub_teams/{subAdminEmail}/members/{memberEmail} {
+      allow create: if (isSuperAdmin() || subAdminEmail == email()) && !exists(/databases/$(database)/documents/sub_teams/$(subAdminEmail)/members/$(memberEmail));
+      allow delete: if isSuperAdmin() || subAdminEmail == email() || memberEmail == email();
+    }
+
+    // Recursive match: collectionGroup('members') queries
+    match /{path=**}/members/{memberEmail} {
+      allow read: if signedIn();
+    }
+
+
+    // ============ config ============
+    match /config/{docId} {
+      allow read: if docId == 'settings' || signedIn();
+      allow write: if isSuperAdmin();
+    }
+  }
+}

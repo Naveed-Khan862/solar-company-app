@@ -21,8 +21,8 @@ class RequestRepository {
 
   List<ServiceRequest> get all => List.unmodifiable(_requests);
 
-  /// Fix #1 (scoped reads): user → sirf apni requests, subAdmin → sirf
-  /// assigned, CEO (superAdmin) → sab. Rules bhi yahi enforce karte hain.
+  /// Fix #1 (scoped reads): user → only their own requests, subAdmin → only
+  /// assigned ones, CEO (superAdmin) → all. The rules enforce the same.
   Future<void> load({required UserModel user}) async {
     if (_loaded) return;
     Query<Map<String, dynamic>> query =
@@ -32,19 +32,19 @@ class RequestRepository {
           ? query.where('assignedTo', isEqualTo: user.email)
           : query.where('userEmail', isEqualTo: user.email);
     }
-    // Pagination (cost control): latest 200 — free tier reads khatam na hon.
-    // NOTE: (assignedTo/userEmail + createdAt) composite indexes chahiye —
-    // app mein query fail hone par error link se ek click mein ban jate hain.
+    // Pagination (cost control): latest 200 — so free-tier reads are not exhausted.
+    // NOTE: (assignedTo/userEmail + createdAt) composite indexes are needed —
+    // in the app link to the error, so the index is one click to create.
     query = query.orderBy('createdAt', descending: true).limit(200);
     final snap = await query.get();
     _requests
       ..clear()
       ..addAll(snap.docs.map((d) => ServiceRequest.fromJson({
         ...d.data(),
-        // Doc ka ASLI id use karo — legacy docs mein 'id' field doc ID se
-        // alag ho sakta hai, aur chat channel/updates doc id par chalti
-        // hain. Warna rules `requests/{id}` par doc dhoond kar deny kar
-        // deta tha (permission denied on request chat).
+        // Use the doc's REAL id — in legacy docs the 'id' field can differ
+        // from the doc ID, and the chat channel/updates depend on the doc
+        // id. Otherwise the rules looked up doc `requests/{id}` and denied
+        // it (permission denied on request chat).
         'id': d.id,
       })));
     _loaded = true;
@@ -63,17 +63,17 @@ class RequestRepository {
   int countAll(RequestStatus status) =>
       _requests.where((r) => r.status == status).length;
 
-  // SEC-03 (rate-limit): client throttle — free tier par cost DoS se bachao.
-  // Rules emailVerified enforce karti hain; ye app-level limits normal spam
-  // rokti hain. Server-side enforcement ke liye Cloud Function chahiye
-  // (Blaze) — Action-Items #SEC-03 mein noted.
+  // SEC-03 (rate-limit): client throttle — guards free-tier cost against DoS.
+  // The rules enforce emailVerified; these app-level limits stop ordinary
+  // spam. Server-side enforcement needs a Cloud Function
+  // (Blaze) — noted in Action-Items #SEC-03.
   static const _minCreateInterval = Duration(seconds: 20);
   static const _maxPending = 10;
   DateTime? _lastCreateAt;
 
   /// Returns null on success, otherwise user-facing error message.
   Future<String?> add(ServiceRequest request) async {
-    // Ek ke baad ek jaldi-jaldi requests band.
+    // Stops sending requests one right after another.
     final now = DateTime.now();
     if (_lastCreateAt != null &&
         now.difference(_lastCreateAt!) < _minCreateInterval) {
@@ -92,7 +92,7 @@ class RequestRepository {
           .doc(request.id)
           .set(request.toJson());
     } catch (e) {
-      return 'Request submit fail hua — $e';
+      return 'Could not submit the request — $e';
     }
     _lastCreateAt = now;
     _requests.insert(0, request);
@@ -100,9 +100,9 @@ class RequestRepository {
     return null;
   }
 
-  /// CEO ne subAdmin remove kiya — uski saari assigned requests unassign
-  /// (assignedTo/assignedByName clear), taake removed user ko wo requests na
-  /// dikhen aur requests dobara assign ki ja saken.
+  /// The CEO removed a subAdmin — unassign all their assigned requests
+  /// (clear assignedTo/assignedByName) so the removed user no longer sees
+  /// those requests and they can be assigned again.
   Future<void> unassignAll(String email) async {
     final db = FirebaseFirestore.instance;
     final snap = await db
@@ -129,10 +129,12 @@ class RequestRepository {
     final i = _requests.indexWhere((r) => r.id == id);
     if (i != -1) {
       _requests[i] = _requests[i].copyWith(status: status);
+      // Field-scoped update — a full .set() used to overwrite concurrent writes
+      // from another device (assign/rating) — a last-write-wins race.
       await FirebaseFirestore.instance
           .collection(Collections.requests)
           .doc(id)
-          .set(_requests[i].toJson());
+          .update({'status': status.name});
       _bump();
     }
   }
@@ -144,7 +146,7 @@ class RequestRepository {
       await FirebaseFirestore.instance
           .collection(Collections.requests)
           .doc(id)
-          .set(_requests[i].toJson());
+          .update({'assignedTo': email, 'assignedByName': name});
       _bump();
     }
   }
@@ -152,8 +154,8 @@ class RequestRepository {
   Future<void> rate(String id, double rating, String review) async {
     final i = _requests.indexWhere((r) => r.id == id);
     if (i == -1) return;
-    // Fix #11: ek request = ek rating — pehle se rated request ko dobara
-    // rate karke statistics manipulate nahi kar sakte.
+    // Fix #11: one request = one rating — an already rated request cannot
+    // be rated again to manipulate the statistics.
     if (_requests[i].isRated) return;
     _requests[i] = _requests[i].copyWith(
       rating: rating,
@@ -163,7 +165,11 @@ class RequestRepository {
     await FirebaseFirestore.instance
         .collection(Collections.requests)
         .doc(id)
-        .set(_requests[i].toJson());
+        .update({
+      'rating': rating,
+      'review': review,
+      'ratedAt': _requests[i].ratedAt!.toIso8601String(),
+    });
     _bump();
   }
 

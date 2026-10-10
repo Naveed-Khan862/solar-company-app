@@ -106,7 +106,7 @@ class ChatInputBar extends StatelessWidget {
               controller: controller,
               style: TextStyle(color: AppPalette.textPrimary),
               onSubmitted: (_) => onSend(),
-              // Fix #11: message length limit — storage/quota abuse se bachao.
+              // Fix #11: message length limit — guards against storage/quota abuse.
               maxLength: 1000,
               decoration: InputDecoration(
                 counterText: '',

@@ -70,7 +70,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         SnackBar(
           content: Text(
             value
-                ? 'Fingerprint login on — login page par fingerprint button aa jayega'
+                ? 'Fingerprint login enabled — the fingerprint button will appear on the login screen'
                 : 'Fingerprint login off',
             style: const TextStyle(color: Colors.white),
           ),
@@ -94,12 +94,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _resetDemo() async {
-    // Security: poora DB wipe kaam hai — sirf superAdmin (CEO) kar sakta hai.
-    final me = ref.read(currentUserProvider);
+    // Security: this wipes the whole DB — only a superAdmin (CEO) can do it.
+    final me = ref.read(currentUser);
     if (me == null || !me.isSuperAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Reset sirf CEO (Super Admin) kar sakta hai'),
+          content: Text('Only the CEO (Super Admin) can reset demo data'),
           backgroundColor: Color(0xFFE53935),
           behavior: SnackBarBehavior.floating,
         ),
@@ -150,16 +150,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  // Crashlytics verify karne ke liye jaani-bujh kar crash. Release build
-  // mein ye report Firebase Console > Crashlytics mein 1-2 min mein aati hai.
+  // Crashes on purpose to verify Crashlytics. In a release build the
+  // report reaches Firebase Console > Crashlytics within 1-2 minutes.
   Future<void> _testCrash() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Test crash?'),
         content: const Text(
-          'App abhi deliberately crash karega. Ye Crashlytics console mein '
-          'report verify karne ke liye hai. Continue?',
+          'The app will now crash on purpose. This is to verify '
+          'the report in the Crashlytics console. Continue?',
         ),
         actions: [
           TextButton(
@@ -177,15 +177,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
     if (confirmed != true) return;
-    // Deliberate crash — release build mein Crashlytics isay pakar leta hai.
+    // Deliberate crash — Crashlytics catches it in a release build.
     FirebaseCrashlytics.instance.crash();
   }
 
-  // Play Store requirement: har user apna account delete kar sakta hai.
-  // AuthService.deleteAccount() sab data (requests, chats, profile, team
-  // memberships) + Firebase Auth account delete karta hai.
+  // Play Store requirement: every user can delete their own account.
+  // AuthService.deleteAccount() removes all data (requests, chats, profile, team
+  // memberships) plus the Firebase Auth account.
   Future<void> _deleteAccount() async {
-    final me = ref.read(currentUserProvider);
+    final me = ref.read(currentUser);
     final isCeo = me?.isSuperAdmin == true;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -194,7 +194,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         content: Text(
           isCeo
               ? 'Your account and all your data (requests, chats, profile, team) will be permanently deleted. '
-                  '⚠️ You are the admin (CEO) — agar koi doosra admin na ho to app unmanageable ho sakti hai. '
+                  '⚠️ You are the admin (CEO) — if there is no other admin, the app may become unmanageable. '
                   'This cannot be undone. Are you sure?'
               : 'Your account and all your data (requests, chats, profile) will be permanently deleted. '
                   'This cannot be undone. Are you sure?',
@@ -229,6 +229,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
       return;
     }
+    // Stream provider handles logout automatically.
+    // Keep legacy clear for backward compat with any remaining sync reads.
     ref.read(currentUserProvider.notifier).state = null;
     if (!mounted) return;
     unawaited(Navigator.of(context).pushAndRemoveUntil(
@@ -249,8 +251,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final fingerprintEnabled = ref.watch(fingerprintEnabledProvider);
     final notificationsEnabled = ref.watch(notificationsEnabledProvider);
     final darkMode = ref.watch(themeControllerProvider);
-    // Reset Demo Data sirf superAdmin (CEO) ko dikhana hai.
-    final isSuperAdmin = ref.read(currentUserProvider)?.isSuperAdmin ?? false;
+    // Reset Demo Data must only be shown to a superAdmin (CEO).
+    final isSuperAdmin = ref.watch(currentUser)?.isSuperAdmin ?? false;
 
     return Scaffold(
       body: AppBackground(
@@ -296,7 +298,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              'Aankhon ko aaram — dark mode on/off',
+                              'Easier on the eyes — toggle dark mode',
                               style: TextStyle(
                                   color: AppPalette.textMuted, fontSize: 12),
                             ),
@@ -322,7 +324,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              'Naye requests, assignments, status changes ki alerts',
+                              'Alerts for new requests, assignments and status changes',
                               style: TextStyle(
                                   color: AppPalette.textMuted, fontSize: 12),
                             ),
@@ -364,7 +366,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             leading: Icon(Icons.info_outline_rounded,
                                 color: Color(0xFF00A86B)),
                             title: Text(
-                              'Solar Company',
+                              'MFES',
                               style: TextStyle(
                                 color: AppPalette.textPrimary,
                                 fontWeight: FontWeight.w600,
@@ -413,7 +415,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                 ),
                               ),
                               subtitle: Text(
-                                'Release build mein jaani-bujh kar crash — Crashlytics console verify karne ke liye',
+                                'Deliberately crashes a release build — use it to verify in the Crashlytics console',
                                 style: TextStyle(
                                     color: AppPalette.textMuted, fontSize: 12),
                               ),
@@ -442,7 +444,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     SizedBox(height: 12),
                     Text(
-                      'Demo logins: admin@company.com (CEO) · sub@company.com (Sub Admin) · koi bhi email (User)',
+                      'Demo logins: admin@company.com (CEO) · sub@company.com (Sub Admin) · any email (User)',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           color: AppPalette.textFaint, fontSize: 11.5),

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/service_request.dart';
 import '../models/user.dart';
 import '../providers.dart';
 import '../theme/app_theme.dart';
+import '../widgets/async_state_view.dart';
 import '../widgets/glass_tilt_card.dart';
 import '../widgets/stat_row.dart';
 import 'reports_screen.dart';
@@ -16,10 +18,7 @@ class AdminDashboard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final total = ref.watch(allRequestsProvider).length;
-    final pending = ref.watch(pendingCountProvider(user));
-    final inProgress = ref.watch(inProgressCountProvider(user));
-    final resolved = ref.watch(resolvedCountProvider(user));
+    final asyncReq = ref.watch(scopedRequestsAsyncProvider(user));
     final displayName = ref.watch(displayNameProvider(user));
 
     return ListView(
@@ -64,22 +63,43 @@ class AdminDashboard extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 16),
-        StatRow(
-          stats: [
-            StatData('Total', '$total', Icons.assignment_rounded,
-                const Color(0xFF00A86B)),
-            StatData('Pending', '$pending', Icons.pending_actions_rounded,
-                const Color(0xFFFFB300)),
-          ],
-        ),
-        const SizedBox(height: 14),
-        StatRow(
-          stats: [
-            StatData('In Progress', '$inProgress',
-                Icons.hourglass_top_rounded, const Color(0xFF2196F3)),
-            StatData('Resolved', '$resolved',
-                Icons.check_circle_rounded, Color(0xFF2E7D32)),
-          ],
+        // AsyncValue.when() — loading / error / data states
+        asyncReq.when(
+          loading: () => const LoadingView(message: 'Loading requests...'),
+          error: (e, st) => ErrorRetryView(
+            error: e,
+            message: 'Failed to load data',
+            onRetry: () => ref
+                .read(scopedRequestsAsyncProvider(user).notifier)
+                .refresh(user),
+          ),
+          data: (requests) {
+            final total = requests.length;
+            final pending = requests.where((r) => r.status == RequestStatus.pending).length;
+            final inProgress = requests.where((r) => r.status == RequestStatus.inProgress).length;
+            final resolved = requests.where((r) => r.status == RequestStatus.resolved).length;
+            return Column(
+              children: [
+                StatRow(
+                  stats: [
+                    StatData('Total', '$total', Icons.assignment_rounded,
+                        const Color(0xFF00A86B)),
+                    StatData('Pending', '$pending', Icons.pending_actions_rounded,
+                        const Color(0xFFFFB300)),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                StatRow(
+                  stats: [
+                    StatData('In Progress', '$inProgress',
+                        Icons.hourglass_top_rounded, const Color(0xFF2196F3)),
+                    StatData('Resolved', '$resolved',
+                        Icons.check_circle_rounded, Color(0xFF2E7D32)),
+                  ],
+                ),
+              ],
+            );
+          },
         ),
         SizedBox(height: 20),
         GlassTiltCard(

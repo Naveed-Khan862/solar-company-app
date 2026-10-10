@@ -38,8 +38,8 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
     _request = widget.request;
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     // Fresh data from Firestore when the request chat opens — receiver side
-    // (ChatScreen wala hi pattern). Warna app-init load mein jo kuch bhi
-    // aya tha usi par reh jata hai.
+    // (same pattern as ChatScreen). Otherwise whatever the app-init load
+    // brought in would be all we ever see.
     _refreshChat();
   }
 
@@ -51,7 +51,7 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
     } catch (_) {
       // permission/network — empty state dikhega
     }
-    if (mounted) ref.invalidate(messagesProvider('request:${_request.id}'));
+    if (mounted) ref.invalidate(chatMessagesAsyncProvider('request:${_request.id}'));
   }
 
   @override
@@ -84,23 +84,23 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
           senderName: widget.user.name,
           text: text,
           sentAt: DateTime.now(),
-          // Rules ki read gate in fields par chalti hai (get() ke bina) —
-          // owner userEmail, assigned subAdmin assignedTo se chat padh sakta hai.
+          // The rules' read gate relies on these fields (without get()) —
+          // the owner reads via userEmail, the assigned subAdmin via assignedTo.
           userEmail: _request.userEmail,
           assignedTo: _request.assignedTo,
-          // SEC-01 v2: rules channel parse nahi karti — requestId se doc path.
+          // SEC-01 v2: rules do not parse the channel — doc path comes from requestId.
           requestId: _request.id,
         ),
       );
     } catch (e) {
-      // Silent fail na ho — text restore karke asli error dikhao taake
-      // pata chale (aam taur par ye rules deny hota hai).
+      // No silent failure — restore the text and show the real error so
+      // it is visible (usually this is a rules denial).
       _chatController.text = text;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Message send nahi hua — $e',
+            'Message could not be sent — $e',
             style: const TextStyle(color: Colors.white),
           ),
           backgroundColor: const Color(0xFFD32F2F),
@@ -110,7 +110,7 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
       return;
     }
     if (!mounted) return;
-    setState(() {});
+    ref.invalidate(messagesProvider('request:${_request.id}'));
     _scrollToBottom();
   }
 
@@ -154,14 +154,14 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final mine = widget.user.email == _request.userEmail;
-    // Chat sirf in teeno ko: request ka owner, assigned sub-admin, ya CEO.
-    // Kisi aur sub-admin ko request chat nahi dikhti (rules bhi yahi gate
-    // karti hain — unassigned sub-admin ko messages query deny ho jati).
+    // The chat is only for these three: the request owner, the assigned
+    // sub-admin, or the CEO. No other sub-admin sees the request chat (the
+    // rules gate the same way — the messages query is denied when unassigned).
     final canChat = _request.status != RequestStatus.resolved &&
         (widget.user.isSuperAdmin ||
             mine ||
             _request.assignedTo == widget.user.email);
-    final messages = ref.watch(messagesProvider('request:${_request.id}'));
+    final asyncMsgs = ref.watch(chatMessagesAsyncProvider('request:${_request.id}'));
     return Scaffold(
       body: AppBackground(
         child: SafeArea(
@@ -312,7 +312,7 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
                               ),
                               Spacer(),
                               Text(
-                                mine ? 'Aap' : _request.userName,
+                                mine ? 'You' : _request.userName,
                                 style: TextStyle(
                                     color: AppPalette.textFaint, fontSize: 12),
                               ),
@@ -337,7 +337,7 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
                               child: Text(
                                 _request.assignedTo == widget.user.email
                                     ? 'This request is assigned to you'
-                                    : 'Is kaam par: ${_request.assignedByName}',
+                                    : 'Assigned to: ${_request.assignedByName}',
                                 style: TextStyle(
                                     color: AppPalette.textSecondary,
                                     fontSize: 13.5),
@@ -368,7 +368,40 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      ..._messages(messages),
+                      ...asyncMsgs.when(
+                        loading: () => [
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                  color: Color(0xFF00A86B), strokeWidth: 2),
+                            ),
+                          ),
+                        ],
+                        error: (e, st) => [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: GlassTiltCard(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 6),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.error_outline_rounded,
+                                        color: Color(0xFFE53935), size: 16),
+                                    const SizedBox(width: 8),
+                                    Text('Messages could not be loaded',
+                                        style: TextStyle(
+                                            color: AppPalette.textMuted,
+                                            fontSize: 12.5)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        data: (msgs) => _messages(msgs),
+                      ),
                     ] else ...[
                       const SizedBox(height: 18),
                       GlassTiltCard(
@@ -488,7 +521,7 @@ class _RequestDetailScreenState extends ConsumerState<RequestDetailScreen> {
           ),
           SizedBox(height: 4),
           Text(
-            'Service kaisi rahi?',
+            'How was the service?',
             style: TextStyle(color: AppPalette.textMuted, fontSize: 12.5),
           ),
           const SizedBox(height: 10),

@@ -1,9 +1,9 @@
-// Solar Company — Firebase Storage Security Rules
+// MFES — Firebase Storage Security Rules
 // =====================================================
-// NOTE: Isay Firebase Console → Storage → Rules mein paste karke DEPLOY karo.
+// NOTE: Paste this into Firebase Console → Storage → Rules and DEPLOY it.
 //
-// Fix #9: profile photos — sirf owner apni photo upload/delete kar sakta hai;
-// koi bhi signed-in user photos dekh sakta hai (avatars).
+// Fix #9: profile photos — only the owner can upload/delete their own photo;
+// any signed-in user can view the photos (avatars).
 rules_version = '2';
 
 service firebase.storage {

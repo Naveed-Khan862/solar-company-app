@@ -129,7 +129,7 @@ class _TeamViewState extends ConsumerState<TeamView> {
               TextField(
                 controller: _nameController,
                 style: TextStyle(color: AppPalette.textPrimary),
-                decoration: _fieldDec('Naam'),
+                decoration: _fieldDec('Name'),
               ),
               SizedBox(height: 10),
               TextField(
@@ -198,7 +198,7 @@ class _TeamViewState extends ConsumerState<TeamView> {
         ),
         SizedBox(height: 16),
         Text(
-          isSuper ? 'Team Members (Sub Admins)' : 'Meri Team',
+          isSuper ? 'Team Members (Sub Admins)' : 'My Team',
           style: TextStyle(
             color: AppPalette.textPrimary,
             fontWeight: FontWeight.w700,

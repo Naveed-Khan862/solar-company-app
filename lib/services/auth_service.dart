@@ -20,19 +20,19 @@ class AuthResult {
 }
 
 class AuthService {
-  // SEC-06: source mein koi hardcoded CEO email nahi — list hamesha Firestore
-  // se aati hai (config/ceoEmails doc, SEC-04 signed-in-only read; legacy
-  // fallback config/settings). ⚠️ Firestore mein config/ceoEmails doc bana
-  // kar usme ceoEmails: [aapki-email] list rakho — warna app CEO ko superAdmin
-  // nahi manegi. Console se email add/remove karo, code change ki zaroorat nahi.
+  // SEC-06: no hardcoded CEO email in source — the list always comes from the
+  // Firestore config/ceoEmails doc (SEC-04 signed-in-only read; legacy
+  // fallback config/settings). ⚠️ Create the config/ceoEmails doc in Firestore
+  // with a ceoEmails: [your-email] list — otherwise the app will not treat the
+  // CEO as superAdmin. Add/remove emails from the Console, no code change needed.
   static List<String> _ceoEmails = [];
 
   static List<String> get ceoEmails => _ceoEmails;
 
   static Future<void> loadCeoEmails() async {
-    // SEC-04: CEO email list ab config/ceoEmails doc mein (signed-in-only
-    // read) — public config/settings se hata di gayi hai. Pehle naya doc,
-    // phir legacy config/settings fallback (migration ke dauraan compatibility).
+    // SEC-04: the CEO email list now lives in the config/ceoEmails doc
+    // (signed-in-only read) — it was removed from public config/settings. Try the
+    // new doc first, then the legacy config/settings fallback (migration support).
     for (final docId in ['ceoEmails', 'settings']) {
       try {
         final doc = await FirebaseFirestore.instance
@@ -47,7 +47,7 @@ class AuthService {
           return;
         }
       } catch (_) {
-        // permission/network — agla source try karo, warna fallback list
+        // permission/network — try the next source, otherwise the fallback list
       }
     }
   }
@@ -58,82 +58,44 @@ class AuthService {
 
   static void markConfigured() => _configured = true;
 
-  static Future<UserModel> _resolveUser(User u) async {
+  /// Resolve Firebase [User] to [UserModel] — reads/creates Firestore user
+  /// doc, checks CEO list, sets Crashlytics identifier.
+  /// Called on every login/signup and by the auth stream provider.
+  static Future<UserModel> resolveFirebaseUser(User u) async {
     final email = (u.email ?? '').toLowerCase();
-    // SEC-04: login ke baad (signed-in) config/ceoEmails dobara load karo —
-    // pre-auth wala load (main.dart) sirf public settings hi padh sakta tha,
-    // isliye ab yahan asli list refresh hoti hai.
-    try {
-      await loadCeoEmails();
-    } catch (_) {}
-    // Crashlytics — crash report ke saath user email bhi jaye taake pata
-    // chale kis user ko masla aya (sirf internal, privacy-safe: email
-    // hashed nahi, lekin sirf developer ko Crashlytics console mein dikhta).
-    try {
-      await FirebaseCrashlytics.instance.setUserIdentifier(email);
-    } catch (_) {}
-    try {
-      // Doc ka ID = email (uniqueness). Purane uid-keyed docs migrante
-      // hain aur delete ho jate hain taake koi duplicate na bachy.
-      final ref = FirebaseFirestore.instance
-          .collection('users')
-          .doc(email);
-      final doc = await ref.get();
-      Map<String, dynamic> data = {};
-      if (doc.exists) {
-        data = doc.data() ?? {};
-      }
-      final isCeo = ceoEmails.contains(email);
-      if (data.isEmpty) {
-        final legacy = await FirebaseFirestore.instance
-            .collection('users')
-            .where('email', isEqualTo: email)
-            .limit(20)
-            .get();
-        for (final d in legacy.docs) {
-          if (d.id == email) continue;
-          final ldata = d.data();
-          if (ldata['role'] == 'superAdmin' || data.isEmpty) {
-            data = ldata;
-          }
-          await d.reference.delete();
-        }
-      }
-      final name = (data['name'] ?? u.displayName ?? email.split('@').first)
-          .toString();
-      final phone = (data['phone'] ?? '').toString();
-      await ref.set({
-        'name': name,
-        'email': email,
-        'phone': phone,
-        'role': isCeo ? 'superAdmin' : data['role'] ?? 'user',
-        'createdAt': data['createdAt'] ?? FieldValue.serverTimestamp(),
-        // Registered flag — sirf login/signup yahan set karta hai. Team
-        // add ke waqt ye check hota hai k email ka account bana hai ya nahi.
-        'signedUp': true,
-      });
-      return UserModel(
-        name: name,
-        email: email,
-        phone: phone,
-        role: isCeo ? UserRole.superAdmin : _roleFromString(data['role']),
-      );
-    } catch (_) {
-      if (ceoEmails.contains(email)) {
-        return UserModel(
-          name: u.displayName ?? email.split('@').first,
-          email: email,
-          phone: '',
-          role: UserRole.superAdmin,
-        );
-      }
-      return UserModel(
-        name: u.displayName ?? email.split('@').first,
-        email: email,
-        phone: '',
-        role: UserRole.user,
-      );
-    }
+    await loadCeoEmails();
+    await FirebaseCrashlytics.instance.setUserIdentifier(email);
+
+    final ref = FirebaseFirestore.instance.collection('users').doc(email);
+    final doc = await ref.get();
+    final data = doc.exists ? doc.data()! : {};
+
+    // Merge: keep existing role if present, otherwise CEO status decides
+    final isCeo = ceoEmails.contains(email);
+    final role = isCeo
+        ? UserRole.superAdmin
+        : (_roleFromString(data['role'] ?? 'user'));
+
+    final name = (data['name'] ?? u.displayName ?? email.split('@').first)
+        .toString();
+    final phone = data['phone'] ?? '';
+
+    // Write/update user doc with consistent data
+    await ref.set({
+      'name': name,
+      'email': email,
+      'phone': phone,
+      'role': role.name,
+      'createdAt': data['createdAt'] ?? FieldValue.serverTimestamp(),
+      'signedUp': true,
+    }, SetOptions(merge: true));
+
+    return UserModel(
+      name: name,
+      email: email,
+      phone: phone,
+      role: role,
+    );
   }
 
   static UserRole _roleFromString(String? role) {
@@ -149,8 +111,6 @@ class AuthService {
 
   static String _errorText(FirebaseAuthException e) {
     switch (e.code) {
-      // Fix #10: enumetration roknay ke liye messages generic — koi bhi
-      // attacker ye na jaan sake ke email registered hai ya nahi.
       case 'email-already-in-use':
         return 'Sign-up failed — try another email or login';
       case 'invalid-email':
@@ -184,7 +144,7 @@ class AuthService {
           await FirebaseAuth.instance.signInWithCredential(credential);
       final u = userCred.user;
       if (u == null) return const AuthResult(null, 'Sign-in failed');
-      return AuthResult(await _resolveUser(u), null);
+      return AuthResult(await resolveFirebaseUser(u), null);
     } on FirebaseAuthException catch (e) {
       return AuthResult(null, _errorText(e));
     } catch (_) {
@@ -200,15 +160,15 @@ class AuthService {
           .signInWithEmailAndPassword(email: email, password: password);
       final u = cred.user;
       if (u == null) return const AuthResult(null, 'Login failed');
-      // Fix #13: unverified email → dobara verification email bhejo (rules
-      // request creation block karte hain jab tak verify nahi hota).
+      // Fix #13: unverified email → send the verification email again (the rules
+      // block request creation until the email is verified).
       String? notice;
       if (!u.emailVerified) {
         await u.sendEmailVerification();
         notice =
-            'Verify your email — link bheja gaya hai. Request banana tab tak limited hai.';
+            'Verify your email — a verification link has been sent. Request creation is limited until you verify.';
       }
-      return AuthResult(await _resolveUser(u), null, notice: notice);
+      return AuthResult(await resolveFirebaseUser(u), null, notice: notice);
     } on FirebaseAuthException catch (e) {
       return AuthResult(null, _errorText(e));
     } catch (_) {
@@ -225,28 +185,28 @@ class AuthService {
     try {
       final cred = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(email: email, password: password);
-      // Auth account pehle ban chuka hai — neeche koi bhi step fail ho to
-      // signup ko fail mat karo, warna account orphan reh jata (auth mein
-      // dikhe, users collection mein na ho). _resolveUser users doc dobara
-      // banata hai, aur har login par bhi self-heal ho jata hai.
+      // The auth account is already created — if any step below fails,
+      // do not fail the signup, otherwise the account stays orphaned (it exists
+      // in auth but not in the users collection). _resolveUser recreates the
+      // users doc, and it self-heals on every login too.
       try {
         await cred.user?.updateDisplayName(name);
       } catch (_) {
-        // display name optional — fail ho to proceed (name email se aayega)
+        // display name optional — proceed if it fails (the name comes from the email)
       }
-      // Fix #13: signup par turant verification email — request creation
-      // rules email_verified maangte hain.
+      // Fix #13: verification email right at signup — the request creation
+      // rules require email_verified.
       try {
         await cred.user?.sendEmailVerification();
       } catch (_) {
-        // verification email fail ho to signup proceed (rules tab bhi block karengi)
+        // if the verification email fails continue signup (the rules block anyway)
       }
       final lower = email.toLowerCase();
-      // FIX: CEO ne pehle se subadmin/team-member bana rakha ho (users doc
-      // maujood, role subAdmin) to signup par usay 'user' par downgrade mat
-      // karo — existing role preserve karo. Naye user ke liye 'user'.
-      // (Rules: self-update sirf apna current role likh sakta hai, isliye
-      // existing role hi likhna allow hai.)
+      // FIX: if the CEO already made this person a subadmin/team-member (the
+      // users doc exists with role subAdmin), do not downgrade them to 'user'
+      // on signup — keep the existing role. A new user gets 'user'.
+      // (Rules: a self-update may only write its current role, so writing the
+      // existing role is the only thing allowed.)
       String role;
       try {
         final existing = await FirebaseFirestore.instance
@@ -259,8 +219,8 @@ class AuthService {
                 ? (existing.data()?['role'] as String? ?? 'user')
                 : 'user');
       } catch (_) {
-        // read fail ho (network) to default 'user' — _resolveUser baad mein
-        // existing doc se sahi role parh leta hai.
+        // if the read fails (network) default to 'user' — _resolveUser later
+        // reads the correct role from the existing doc.
         role = ceoEmails.contains(lower) ? 'superAdmin' : 'user';
       }
       try {
@@ -276,13 +236,13 @@ class AuthService {
           'signedUp': true,
         });
       } catch (_) {
-        // users doc write fail ho (network/rules) to bhi signup proceed —
-        // _resolveUser neeche dobara try karta hai, aur agli baar login par
-        // bhi doc ban jata hai. Sirf CEO bina config/ceoEmails ke rules se
-        // block ho sakta hai (role superAdmin) — wo config set karke login
-        // karne par ban jata hai.
+        // even if the users doc write fails (network/rules) continue signup —
+        // _resolveUser tries again below, and normally on the next login
+        // the doc is created too. Only a CEO without config/ceoEmails can be
+        // blocked by the rules (role superAdmin) — that one is created once the
+        // config is set and they log in.
       }
-      return AuthResult(await _resolveUser(cred.user!), null);
+      return AuthResult(await resolveFirebaseUser(cred.user!), null);
     } on FirebaseAuthException catch (e) {
       return AuthResult(null, _errorText(e));
     } catch (_) {
@@ -306,13 +266,13 @@ class AuthService {
     await FirebaseAuth.instance.signOut();
   }
 
-  /// Play Store requirement (account deletion): user ka poora data delete
-  /// + Firebase Auth account delete. Sirf APNA data — requests (userEmail),
+  /// Play Store requirement (account deletion): delete all of the user's data
+  /// + delete the Firebase Auth account. OWN data only — requests (userEmail),
   /// messages (senderEmail), notifications (forEmail), profile/users/team
-  /// doc, apni sub_team (agar subAdmin ho), aur doosri teams ki memberships.
-  /// Assigned requests delete nahi hoti — unassign ho jati hain (client ki
-  /// request rehti hai, sirf assignment hat'ti hai). Rules sab self-delete
-  /// allow karte hain (firestore.rules — account deletion block).
+  /// doc, their own sub_team (if subAdmin), and memberships in other teams.
+  /// Assigned requests are not deleted — they are unassigned (the client's
+  /// request stays, only the assignment goes away). The rules allow every
+  /// self-delete (firestore.rules — account deletion block).
   ///
   /// Returns null on success, otherwise error message.
   static Future<String?> deleteAccount() async {
@@ -323,11 +283,11 @@ class AuthService {
 
     final db = FirebaseFirestore.instance;
     try {
-      // 1. Assigned requests unassign — subAdmin ka account delete ho to
-      //    clients ki requests orphan na rahen.
+      // 1. Unassign assigned requests — when a subAdmin account is deleted,
+      //    client requests must not be left orphaned.
       await RequestRepository.instance.unassignAll(email);
 
-      // 2. Apni cheezein delete (sirf apna data — rules allow karte hain).
+      // 2. Delete own items (own data only — the rules allow it).
       await _deleteWhere(
           db.collection(Collections.requests), 'userEmail', email);
       await _deleteWhere(
@@ -335,14 +295,14 @@ class AuthService {
       await _deleteWhere(
           db.collection(Collections.notifications), 'forEmail', email);
 
-      // 3. Docs — koi doc exist na ho to delete no-op hai (safe). Ek fail
-      //    ho to baqi kaam rukna nahi chahiye.
+      // 3. Docs — deleting a non-existent doc is a no-op (safe). One failure
+      //    must not stop the rest of the work.
       await _tryDelete(db.collection(Collections.profiles).doc(email));
       await _tryDelete(db.collection(Collections.users).doc(email));
       await _tryDelete(db.collection(Collections.team).doc(email));
 
       // 4. Apni sub_team + members (agar subAdmin ho).
-      final myTeamRef = db.collection(Collections.subTeams).doc(email);
+      final myTeamRef = db.collection(Collections.team).doc(email);
       final myMembers = await myTeamRef.collection('members').get();
       if (myMembers.docs.isNotEmpty) {
         final b = db.batch();
@@ -351,7 +311,7 @@ class AuthService {
       }
       await _tryDelete(myTeamRef);
 
-      // 5. Doosri sub_teams ki memberships (jahan user member ho).
+      // 5. Memberships in other sub_teams (where the user is a member).
       final memberships = await db
           .collectionGroup('members')
           .where('email', isEqualTo: email)
@@ -366,29 +326,28 @@ class AuthService {
       await LocalStorage.instance.saveSettings(SettingsData());
       await SecureCredentials.clear();
 
-      // 7. Firebase Auth account — delete ke liye recent login chahiye.
+      // 7. Firebase Auth account — deletion requires a recent login.
       try {
         await user.delete();
       } on FirebaseAuthException catch (e) {
         if (e.code == 'requires-recent-login') {
           await auth.signOut();
-          return 'Data delete ho gaya. Login phir se karke "Delete Account" dobara dabao — login account bhi remove ho jayega.';
+          return 'Your data has been deleted. Log in again and tap "Delete Account" once more — the login account will also be removed.';
         }
         rethrow;
       }
       return null;
     } on FirebaseException catch (e) {
-      return 'Delete fail hua: ${e.message}';
+      return 'Delete failed: ${e.message}';
     } catch (_) {
       return 'Network issue — please try again';
     }
   }
 
   static Future<void> _deleteWhere(
-    CollectionReference<Map<String, dynamic>> collection,
-    String field,
-    String value,
-  ) async {
+      CollectionReference<Map<String, dynamic>> collection,
+      String field,
+      String value,) async {
     final snap = await collection.where(field, isEqualTo: value).get();
     if (snap.docs.isEmpty) return;
     final batch = FirebaseFirestore.instance.batch();
@@ -400,7 +359,7 @@ class AuthService {
     try {
       await ref.delete();
     } catch (_) {
-      // permission/network — aage badho, baqi cleanup important hai
+      // permission/network — carry on, the rest of the cleanup matters
     }
   }
 }

@@ -21,8 +21,11 @@ class _AppBackgroundState extends State<AppBackground>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 18),
-    )..repeat();
+      duration: const Duration(seconds: 20),
+    )..forward();
+    // Battery fix: forward() instead of repeat() — animation plays once
+    // on screen load and stops. Orbs settle into a static pleasing position.
+    // Continuous repeat drained battery across every screen.
   }
 
   @override

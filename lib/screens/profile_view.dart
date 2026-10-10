@@ -36,20 +36,20 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       String photoValue;
-      // Fix #9: photo Firebase Storage mein upload hoti hai (best practice,
-      // Blaze plan par). Spark (free) plan par Storage enable nahi hota —
-      // us case mein base64 Firestore fallback (jo Spark par chalta hai).
+      // Fix #9: the photo is uploaded to Firebase Storage (best practice,
+      // on the Blaze plan). Storage cannot be enabled on the (free) Spark plan,
+      // so we fall back to base64 in Firestore (which works on Spark).
       try {
         final storageRef = FirebaseStorage.instance
             .ref()
             .child('profile_photos/${widget.user.email}.jpg');
-        // Purani photo (URL wali) delete karo taake storage na bhare.
+        // Delete the old photo (the URL one) so storage does not fill up.
         final old = ref.read(profileRepositoryProvider).photoFor(widget.user.email);
         if (old != null && old.startsWith('http')) {
           try {
             await FirebaseStorage.instance.refFromURL(old).delete();
           } catch (_) {
-            // purani file delete na ho to ignore
+            // ignore if the old file cannot be deleted
           }
         }
         await storageRef.putData(
@@ -95,7 +95,7 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
               controller: nameCtrl,
               style: TextStyle(color: AppPalette.textPrimary),
               decoration: InputDecoration(
-                labelText: 'Naam',
+                labelText: 'Name',
                 labelStyle: TextStyle(color: AppPalette.textMuted),
               ),
             ),
@@ -334,7 +334,7 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
                                   fit: BoxFit.cover,
                                 )
                               : Image.memory(
-                                  // Legacy base64 photos (migration se pehle)
+                                  // Legacy base64 photos (from before the migration)
                                   base64Decode(photo),
                                   width: 86,
                                   height: 86,
@@ -425,7 +425,7 @@ class _ProfileViewState extends ConsumerState<ProfileView> {
                   ? 'Requests (All)'
                   : user.isSubAdmin
                       ? 'Requests (My Assignments)'
-                      : 'Requests (Meri)',
+                      :          'Requests (Mine)',
               style: TextStyle(
                 color: AppPalette.textPrimary,
                 fontWeight: FontWeight.w700,

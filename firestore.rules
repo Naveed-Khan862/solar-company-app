@@ -1,21 +1,7 @@
-// Solar Company — Firestore Security Rules
-// =====================================================
-// FINAL (2026-08-19):
-// - READ: sab signedIn() — Firestore queries get()-based rules prove nahi
-//   kar sakta => queries hamesha pass hongi. App UI hi accessible data
-//   dikhati hai.
-// - members collectionGroup query: specific path match CG queries par nahi
-//   chalti — RECURSIVE match /{path=**}/members/{memberEmail} zaroori hai.
-// - WRITE: message create sirf senderEmail (case-insensitive) + text checks
-//   — channel gating UI se. get()/exists()-based canWriteChannel ne
-//   legacy/mixed-case data par deny kiya; isliye hata diya.
-//   Upgrade path: readers-array pattern jab privacy zaroori ho.
-// - Baqi writes strict (roles, field gates, deletes) — wo kabhi fail nahi
-//   karti kyunki single-doc ops par get() chalta hai.
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
+
 
     // ============ Helpers ============
 
@@ -33,61 +19,68 @@ service cloud.firestore {
       return getRole(email());
     }
 
-    function isCEO() {
-      return (exists(/databases/$(database)/documents/config/ceoEmails)
-          && ((get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is list
-              && email() in get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails)
-              || (get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails is string
-                  && get(/databases/$(database)/documents/config/ceoEmails).data.ceoEmails.lower() == email())))
-        || (exists(/databases/$(database)/documents/config/settings)
-          && ((get(/databases/$(database)/documents/config/settings).data.ceoEmails is list
-              && email() in get(/databases/$(database)/documents/config/settings).data.ceoEmails)
-              || (get(/databases/$(database)/documents/config/settings).data.ceoEmails is string
-                  && get(/databases/$(database)/documents/config/settings).data.ceoEmails.lower() == email())));
+
+    // ============ messages (chat) ============
+    // CHAT FIX: READ is signedIn.
+    // The message-level `participants` gate broke chat — in support chat
+    // every message's participants are {staff, sender}, so when staff
+    // replied, that message carried no client email and the client
+    // never saw the reply (only their own messages).
+    // The write gates below are strict: only the channel's allowed user can write.
+    match /messages/{messageId} {
+      allow read: if request.auth != null;
+
+      // CREATE: sender + participants + channel gate
+      allow create: if request.auth != null
+        && request.resource.data.senderEmail is string
+        && request.resource.data.senderEmail.lower() == email()
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 1
+        && request.resource.data.text.size() <= 1000
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 1
+        && request.resource.data.participants.size() <= 40
+        && email() in request.resource.data.participants
+        && (request.resource.data.channel == 'support'
+            || (request.resource.data.channel == 'admin'
+                && (roleOf() == 'superAdmin' || roleOf() == 'subAdmin'))
+            || (request.resource.data.channel == 'subadmins'
+                && roleOf() == 'subAdmin')
+            // Team chat: member, team owner ya CEO
+            || (request.resource.data.channel.startsWith('team:')
+                && (exists(/databases/$(database)/documents/sub_teams/
+                      $(request.resource.data.channel.substring(5, request.resource.data.channel.size()))/members/$(email()))
+                    || request.resource.data.channel.substring(5, request.resource.data.channel.size()).lower() == email()
+                    || roleOf() == 'superAdmin'))
+            // Request chat: request owner, assigned subAdmin ya CEO
+            || (request.resource.data.channel.startsWith('request:')
+                && exists(/databases/$(database)/documents/requests/
+                    $(request.resource.data.channel.substring(8, request.resource.data.channel.size())))
+                && (roleOf() == 'superAdmin'
+                    || (get(/databases/$(database)/documents/requests/
+                        $(request.resource.data.channel.substring(8, request.resource.data.channel.size()))).data.userEmail is string
+                        && get(/databases/$(database)/documents/requests/
+                            $(request.resource.data.channel.substring(8, request.resource.data.channel.size()))).data.userEmail.lower() == email())
+                    || (get(/databases/$(database)/documents/requests/
+                        $(request.resource.data.channel.substring(8, request.resource.data.channel.size()))).data.assignedTo is string
+                        && get(/databases/$(database)/documents/requests/
+                            $(request.resource.data.channel.substring(8, request.resource.data.channel.size()))).data.assignedTo.lower() == email()))));
+
+      // UPDATE: for the legacy backfill — the CEO may only change the
+      // `participants` field (ChatRepository.migrateLegacyParticipants).
+      allow update: if request.auth != null
+        && roleOf() == 'superAdmin'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants']);
+
+      allow delete: if request.auth != null
+        && (resource.data.senderEmail == email() || roleOf() == 'superAdmin');
     }
 
-    function isSuperAdmin() {
-      return roleOf() == 'superAdmin' || isCEO();
-    }
-
-    function isSubAdmin() {
-      return roleOf() == 'subAdmin';
-    }
-
-    function isAdmin() {
-      return isSuperAdmin() || isSubAdmin();
-    }
-
-    function signedIn() {
-      return request.auth != null;
-    }
-
-    function emailVerified() {
-      return request.auth.token.email_verified == true;
-    }
-
-    // ============ users ============
-    match /users/{userEmail} {
-      allow read: if signedIn();
-      allow create: if signedIn() && (
-        (request.resource.data.email == email() && request.resource.data.role == 'user')
-        || (isSuperAdmin() && request.resource.data.role in ['user', 'subAdmin'])
-        || (isSubAdmin() && request.resource.data.role == 'user')
-        || (isCEO() && request.resource.data.email == email())
-      );
-      allow update: if signedIn() && (
-        (request.resource.data.email == email() && request.resource.data.role == roleOf())
-        || (isSuperAdmin() && request.resource.data.role in ['user', 'subAdmin'])
-        || (isSubAdmin() && request.resource.data.role == 'user')
-        || (isCEO() && request.resource.data.email == email())
-      );
-      allow delete: if signedIn() && (resource.data.email == email() || isSuperAdmin());
-    }
 
     // ============ requests ============
     match /requests/{requestId} {
-      allow read: if signedIn();
-      allow create: if signedIn() && (isAdmin() || emailVerified())
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
         && request.resource.data.userEmail == email()
         && request.resource.data.id == requestId
         && request.resource.data.status == 'pending'
@@ -106,91 +99,98 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['id', 'userEmail', 'userName',
             'category', 'subCategory', 'priority', 'description', 'status',
             'createdAt', 'assignedTo', 'assignedByName', 'address', 'phone']);
-      allow update: if signedIn() && (
-        isSuperAdmin()
-        || (resource.data.userEmail == email()
-            && !('rating' in resource.data)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'review', 'ratedAt']))
-        || (isSubAdmin() && resource.data.assignedTo == email()
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
-      );
-      allow delete: if isSuperAdmin() || resource.data.userEmail == email();
+      allow update: if request.auth != null
+        && (roleOf() == 'superAdmin'
+            || (resource.data.userEmail == email()
+                && !('rating' in resource.data)
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'review', 'ratedAt']))
+            || (roleOf() == 'subAdmin' && resource.data.assignedTo == email()
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])));
+      allow delete: if request.auth != null
+        && (resource.data.userEmail == email() || roleOf() == 'superAdmin');
     }
 
-    // ============ messages (chat) ============
-    // READ: signedIn() — queries sirf channel par filter karti hain, koi
-    // get()-based branch query par prove nahi hoti.
-    // CREATE: senderEmail (case-insensitive) + text checks. Channel gating
-    // UI se — app sirf accessible channels dikhati hai. canWriteChannel
-    // (get/exists-based) legacy/mixed-case data par deny deta tha — hata diya.
-    match /messages/{messageId} {
-      allow read: if signedIn();
-      allow create: if signedIn()
-        && request.resource.data.senderEmail is string
-        && request.resource.data.senderEmail.lower() == email()
-        && request.resource.data.text is string
-        && request.resource.data.text.size() >= 1
-        && request.resource.data.text.size() <= 1000;
-      allow update: if signedIn()
-        && resource.data.senderEmail is string
-        && resource.data.senderEmail.lower() == email();
-      allow delete: if isSuperAdmin() || (resource.data.senderEmail is string && resource.data.senderEmail.lower() == email());
+
+    // ============ users ============
+    match /users/{userEmail} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && ((request.resource.data.email == email() && request.resource.data.role == 'user')
+            || (roleOf() == 'superAdmin' && request.resource.data.role in ['user', 'subAdmin'])
+            || (roleOf() == 'subAdmin' && request.resource.data.role == 'user')
+            || (roleOf() == 'superAdmin' && request.resource.data.email == email()));
+      allow update: if request.auth != null
+        && ((request.resource.data.email == email() && request.resource.data.role == roleOf())
+            || (roleOf() == 'superAdmin' && request.resource.data.role in ['user', 'subAdmin'])
+            || (roleOf() == 'subAdmin' && request.resource.data.role == 'user')
+            || (roleOf() == 'superAdmin' && request.resource.data.email == email()));
+      allow delete: if request.auth != null
+        && (resource.data.email == email() || roleOf() == 'superAdmin');
     }
+
 
     // ============ notifications ============
     match /notifications/{notifId} {
-      allow read: if signedIn();
-      allow create: if signedIn()
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
         && request.resource.data.title is string
         && request.resource.data.title.size() <= 100
         && request.resource.data.body is string
         && request.resource.data.body.size() <= 500
-        && (isAdmin()
-            || request.resource.data.forEmail == email()
-        );
-      allow update: if signedIn() &&
-        (resource.data.forEmail == email() || resource.data.forEmail == '') &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
-      allow delete: if isSuperAdmin() || resource.data.forEmail == email();
+        && (roleOf() == 'superAdmin'
+            || request.resource.data.forEmail == email());
+      allow update: if request.auth != null
+        && (resource.data.forEmail == email() || resource.data.forEmail == '')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if roleOf() == 'superAdmin' || resource.data.forEmail == email();
     }
+
 
     // ============ profiles ============
     match /profiles/{profileEmail} {
-      allow read: if signedIn();
-      allow create: if signedIn() && profileEmail == email();
-      allow update: if signedIn() && profileEmail == email();
-      allow delete: if isSuperAdmin() || profileEmail == email();
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && profileEmail == email();
+      allow update: if request.auth != null && profileEmail == email();
+      allow delete: if roleOf() == 'superAdmin' || profileEmail == email();
     }
+
 
     // ============ team (Sub Admins) ============
     match /team/{memberEmail} {
-      allow read: if signedIn();
-      allow create: if isSuperAdmin() && !exists(/databases/$(database)/documents/team/$(memberEmail));
-      allow delete: if isSuperAdmin() || memberEmail == email();
+      allow read: if request.auth != null;
+      allow create: if roleOf() == 'superAdmin'
+        && !exists(/databases/$(database)/documents/team/$(memberEmail));
+      allow delete: if roleOf() == 'superAdmin'
+        || memberEmail == email();
     }
+
 
     // ============ sub_teams ============
     match /sub_teams/{subAdminEmail} {
-      allow read: if signedIn();
-      allow delete: if isSuperAdmin() || subAdminEmail == email();
+      allow read: if request.auth != null;
+      allow delete: if roleOf() == 'superAdmin'
+        || subAdminEmail == email();
     }
 
-    // Specific match: create/delete ke liye (subAdminEmail path variable chahiye).
+    // Specific match for create/delete (the subAdminEmail path variable is needed).
     match /sub_teams/{subAdminEmail}/members/{memberEmail} {
-      allow create: if (isSuperAdmin() || subAdminEmail == email()) && !exists(/databases/$(database)/documents/sub_teams/$(subAdminEmail)/members/$(memberEmail));
-      allow delete: if isSuperAdmin() || subAdminEmail == email() || memberEmail == email();
+      allow create: if (roleOf() == 'superAdmin'
+          || subAdminEmail == email())
+        && !exists(/databases/$(database)/documents/sub_teams/$(subAdminEmail)/members/$(memberEmail));
+      allow delete: if roleOf() == 'superAdmin'
+        || subAdminEmail == email() || memberEmail == email();
     }
 
-    // Recursive match: collectionGroup('members') queries SIRF is form se
-    // match hoti hain (specific path CG queries par apply nahi hoti).
+    // Recursive match: collectionGroup('members') queries
     match /{path=**}/members/{memberEmail} {
-      allow read: if signedIn();
+      allow read: if request.auth != null;
     }
+
 
     // ============ config ============
     match /config/{docId} {
-      allow read: if docId == 'settings' || signedIn();
-      allow write: if isSuperAdmin();
+      allow read: if docId == 'settings' || request.auth != null;
+      allow write: if roleOf() == 'superAdmin';
     }
   }
 }
