@@ -184,6 +184,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 8),
+                    // Brand: the app logo, same artwork as the launcher icon.
+                    Center(
+                      child: ClipOval(
+                        child: Image.asset(
+                          'assets/brand/app_logo.jpg',
+                          width: 92,
+                          height: 92,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
                     ShaderMask(
                       shaderCallback: (bounds) => const LinearGradient(
                         colors: [Color(0xFF007A4D), Color(0xFF00B26B)],
